@@ -2342,8 +2342,8 @@ gui_mch_draw_string(
     /* On NT, tell the font renderer not to "help" us with Hebrew and Arabic
      * text.  This doesn't work in 9x, so we have to deal with it manually on
      * those systems. */
-    if (os_version.dwPlatformId == VER_PLATFORM_WIN32_NT)
-	foptions |= ETO_IGNORELANGUAGE;
+    /* if (os_version.dwPlatformId == VER_PLATFORM_WIN32_NT) */
+	/* foptions |= ETO_IGNORELANGUAGE; */
 
     /*
      * We have to provide the padding argument because italic and bold versions
