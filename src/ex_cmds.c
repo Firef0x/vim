@@ -1554,9 +1554,11 @@ make_filter_cmd(cmd, itmp, otmp)
 
 #if (defined(UNIX) && !defined(ARCHIE)) || defined(OS2)
     int		is_fish_shell;
+    char_u	*shell_name = get_isolated_shell_name();
 
     /* Account for fish's different syntax for subshells */
-    is_fish_shell = (fnamecmp(get_isolated_shell_name(), "fish") == 0);
+    is_fish_shell = (fnamecmp(shell_name, "fish") == 0);
+    vim_free(shell_name);
     if (is_fish_shell)
 	len = (long_u)STRLEN(cmd) + 13;		/* "begin; " + "; end" + NUL */
     else
@@ -2002,11 +2004,14 @@ write_viminfo(file, forceit)
     {
 	fclose(fp_in);
 
-	/*
-	 * In case of an error keep the original viminfo file.
-	 * Otherwise rename the newly written file.
-	 */
-	if (viminfo_errcnt || vim_rename(tempname, fname) == -1)
+	/* In case of an error keep the original viminfo file.  Otherwise
+	 * rename the newly written file.  Give an error if that fails. */
+	if (viminfo_errcnt == 0 && vim_rename(tempname, fname) == -1)
+	{
+	    ++viminfo_errcnt;
+	    EMSG2(_("E886: Can't rename viminfo file to %s!"), fname);
+	}
+	if (viminfo_errcnt > 0)
 	    mch_remove(tempname);
 
 #ifdef WIN3264

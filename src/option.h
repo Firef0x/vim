@@ -213,7 +213,8 @@
 #define SHM_SEARCH	's'		/* no search hit bottom messages */
 #define SHM_ATTENTION	'A'		/* no ATTENTION messages */
 #define SHM_INTRO	'I'		/* intro messages */
-#define SHM_ALL		"rmfixlnwaWtToOsAI" /* all possible flags for 'shm' */
+#define SHM_COMPLETIONMENU  'c'		/* completion menu messages */
+#define SHM_ALL		"rmfixlnwaWtToOsAIc" /* all possible flags for 'shm' */
 
 /* characters for p_go: */
 #define GO_ASEL		'a'		/* autoselect */
@@ -656,6 +657,9 @@ EXTERN long	p_rdt;		/* 'redrawtime' */
 EXTERN int	p_remap;	/* 'remap' */
 EXTERN long	p_re;		/* 'regexpengine' */
 EXTERN long	p_report;	/* 'report' */
+#ifdef FEAT_RENDER_OPTIONS
+EXTERN char_u	*p_rop;		/* 'renderoptions' */
+#endif
 #if defined(FEAT_WINDOWS) && defined(FEAT_QUICKFIX)
 EXTERN long	p_pvh;		/* 'previewheight' */
 #endif
@@ -1051,6 +1055,10 @@ enum
 #endif
 #ifdef FEAT_CURSORBIND
     , WV_CRBIND
+#endif
+#ifdef FEAT_LINEBREAK
+    , WV_BRI
+    , WV_BRIOPT
 #endif
 #ifdef FEAT_DIFF
     , WV_DIFF

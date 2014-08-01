@@ -371,7 +371,11 @@ close_buffer(win, buf, action, abort_if_last)
 	unload_buf = TRUE;
 #endif
 
-    if (win != NULL)
+    if (win != NULL
+#ifdef FEAT_WINDOWS
+	&& win_valid(win)	/* in case autocommands closed the window */
+#endif
+	    )
     {
 	/* Set b_last_cursor when closing the last window for the buffer.
 	 * Remember the last cursor position and window options of the buffer.
@@ -5698,8 +5702,8 @@ buf_delete_signs(buf)
     signlist_T	*next;
 
     /* When deleting the last sign need to redraw the windows to remove the
-     * sign column. */
-    if (buf->b_signlist != NULL)
+     * sign column. Not when curwin is NULL (this means we're exiting). */
+    if (buf->b_signlist != NULL && curwin != NULL)
     {
 	redraw_buf_later(buf, NOT_VALID);
 	changed_cline_bef_curs();
