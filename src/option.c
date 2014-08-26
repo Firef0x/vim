@@ -2124,11 +2124,15 @@ static struct vimoption
     {"remap",	    NULL,   P_BOOL|P_VI_DEF,
 			    (char_u *)&p_remap, PV_NONE,
 			    {(char_u *)TRUE, (char_u *)0L} SCRIPTID_INIT},
-#ifdef FEAT_RENDER_OPTIONS
     {"renderoptions", "rop", P_STRING|P_COMMA|P_RCLR|P_VI_DEF,
+#ifdef FEAT_RENDER_OPTIONS
 			    (char_u *)&p_rop, PV_NONE,
-			    {(char_u *)"", (char_u *)0L} SCRIPTID_INIT},
+			    {(char_u *)"", (char_u *)0L}
+#else
+			    (char_u *)NULL, PV_NONE,
+			    {(char_u *)NULL, (char_u *)0L}
 #endif
+			    SCRIPTID_INIT},
     {"report",	    NULL,   P_NUM|P_VI_DEF,
 			    (char_u *)&p_report, PV_NONE,
 			    {(char_u *)2L, (char_u *)0L} SCRIPTID_INIT},
@@ -2985,7 +2989,7 @@ static char *(p_bg_values[]) = {"light", "dark", NULL};
 static char *(p_nf_values[]) = {"octal", "hex", "alpha", NULL};
 static char *(p_ff_values[]) = {FF_UNIX, FF_DOS, FF_MAC, NULL};
 #ifdef FEAT_CRYPT
-static char *(p_cm_values[]) = {"zip", "blowfish", NULL};
+static char *(p_cm_values[]) = {"zip", "blowfish", "blowfish2", NULL};
 #endif
 #ifdef FEAT_CMDL_COMPL
 static char *(p_wop_values[]) = {"tagfile", NULL};
@@ -6136,7 +6140,7 @@ did_set_string_option(opt_idx, varp, new_value_alloced, oldval, errbuf,
 # endif
 	if (STRCMP(curbuf->b_p_key, oldval) != 0)
 	    /* Need to update the swapfile. */
-	    ml_set_crypt_key(curbuf, oldval, get_crypt_method(curbuf));
+	    ml_set_crypt_key(curbuf, oldval, crypt_get_method_nr(curbuf));
     }
 
     else if (gvarp == &p_cm)
@@ -6147,7 +6151,7 @@ did_set_string_option(opt_idx, varp, new_value_alloced, oldval, errbuf,
 	    p = p_cm;
 	if (check_opt_strings(p, p_cm_values, TRUE) != OK)
 	    errmsg = e_invarg;
-	else if (get_crypt_method(curbuf) > 0 && blowfish_self_test() == FAIL)
+	else if (crypt_self_test() == FAIL)
 	    errmsg = e_invarg;
 	else
 	{
@@ -6173,7 +6177,7 @@ did_set_string_option(opt_idx, varp, new_value_alloced, oldval, errbuf,
 		p = curbuf->b_p_cm;
 	    if (STRCMP(s, p) != 0)
 		ml_set_crypt_key(curbuf, curbuf->b_p_key,
-						 crypt_method_from_string(s));
+						crypt_method_nr_from_name(s));
 
 	    /* If the global value changes need to update the swapfile for all
 	     * buffers using that value. */
@@ -6184,7 +6188,7 @@ did_set_string_option(opt_idx, varp, new_value_alloced, oldval, errbuf,
 		for (buf = firstbuf; buf != NULL; buf = buf->b_next)
 		    if (buf != curbuf && *buf->b_p_cm == NUL)
 			ml_set_crypt_key(buf, buf->b_p_key,
-					    crypt_method_from_string(oldval));
+					   crypt_method_nr_from_name(oldval));
 	    }
 	}
     }
@@ -7004,11 +7008,9 @@ did_set_string_option(opt_idx, varp, new_value_alloced, oldval, errbuf,
     }
 #endif
 
-#if defined(FEAT_GUI) && defined(FEAT_RENDER_OPTIONS)
+#if defined(FEAT_RENDER_OPTIONS)
     else if (varp == &p_rop && gui.in_use)
     {
-	int gui_mch_set_rendering_options(char_u *);
-
 	if (!gui_mch_set_rendering_options(p_rop))
 	    errmsg = e_invarg;
     }

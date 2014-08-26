@@ -2229,10 +2229,18 @@ A jump table for the options with a short description can be found at |Q_op|.
 	   zip		PkZip compatible method.  A weak kind of encryption.
 			Backwards compatible with Vim 7.2 and older.
 							*blowfish*
-	   blowfish	Blowfish method.  Strong encryption.  Requires Vim 7.3
-			or later, files can NOT be read by Vim 7.2 and older.
-			This adds a "seed" to the file, every time you write
-			the file the encrypted bytes will be different.
+	   blowfish	Blowfish method.  Medium strong encryption but it has
+			an implementation flaw.  Requires Vim 7.3 or later,
+			files can NOT be read by Vim 7.2 and older.  This adds
+			a "seed" to the file, every time you write the file
+			the encrypted bytes will be different.
+							*blowfish2*
+	   blowfish2	Blowfish method.  Medium strong encryption.  Requires
+			Vim 7.4.399 or later, files can NOT be read by Vim 7.3
+			and older.  This adds a "seed" to the file, every time
+			you write the file the encrypted bytes will be
+			different.  The whole undo file is encrypted, not just
+			the pieces of text.
 
 	When reading an encrypted file 'cryptmethod' will be set automatically
 	to the detected method of the file being read.  Thus if you write it
@@ -5654,15 +5662,15 @@ A jump table for the options with a short description can be found at |Q_op|.
 'renderoptions' 'rop'	string  (default: empty)
 			global
 			{not in Vi}
-			{only available when compiled with GUI and DIRECTX
-			enabled for MS-Windows}
-	Select a text renderer and set its options.  The options are depends
-	on the renderer.
+			{only available when compiled with GUI and DIRECTX on
+			MS-Windows}
+	Select a text renderer and set its options.  The options depend on the
+	renderer.
 
 	Syntax: >
 		set rop=type:{renderer}(,{name}:{value})*
 <
-	Currently, only one renderer is available.
+	Currently, only one optional renderer is available.
 
 	render	behavior    ~
 	directx	Vim will draw text using DirectX (DirectWrite).  It makes
@@ -5719,7 +5727,7 @@ A jump table for the options with a short description can be found at |Q_op|.
 		If select a raster font (Courier, Terminal or FixedSys) to
 		'guifont', it fallbacks to be drawn by GDI automatically.
 
-	Other render types are not supported currently.
+	Other render types are currently not supported.
 
 						*'report'*
 'report'		number	(default 2)

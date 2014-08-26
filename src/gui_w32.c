@@ -25,11 +25,11 @@
 
 #include "vim.h"
 
-#ifdef FEAT_DIRECTX
+#if defined(FEAT_DIRECTX)
 # include "gui_dwrite.h"
 #endif
 
-#ifdef FEAT_DIRECTX
+#if defined(FEAT_DIRECTX) || defined(PROTO)
 static DWriteContext *s_dwc = NULL;
 static int s_directx_enabled = 0;
 static int s_directx_load_attempted = 0;
@@ -50,7 +50,7 @@ directx_enabled(void)
 }
 #endif
 
-#ifdef FEAT_RENDER_OPTIONS
+#if defined(FEAT_RENDER_OPTIONS) || defined(PROTO)
     int
 gui_mch_set_rendering_options(char_u *s)
 {
@@ -74,7 +74,7 @@ gui_mch_set_rendering_options(char_u *s)
 	char_u  name[128];
 	char_u  value[128];
 
-	copy_option_part(&p, item, sizeof(item), ",");
+	copy_option_part(&p, item, sizeof(item), ","); 
 	if (p == NULL)
 	    break;
 	q = &item[0];
@@ -1765,7 +1765,7 @@ gui_mch_init(void)
 
 #ifdef FEAT_RENDER_OPTIONS
     if (p_rop)
-        (void)gui_mch_set_rendering_options(p_rop);
+	(void)gui_mch_set_rendering_options(p_rop);
 #endif
 
 theend:
@@ -1839,9 +1839,9 @@ gui_mch_set_shellsize(int width, int height,
 
     /* compute the size of the outside of the window */
     win_width = width + (GetSystemMetrics(SM_CXFRAME) +
-                         GetSystemMetrics(SM_CXPADDEDBORDER)) * 2;
+			 GetSystemMetrics(SM_CXPADDEDBORDER)) * 2;
     win_height = height + (GetSystemMetrics(SM_CYFRAME) +
-                           GetSystemMetrics(SM_CXPADDEDBORDER)) * 2
+			   GetSystemMetrics(SM_CXPADDEDBORDER)) * 2
 			+ GetSystemMetrics(SM_CYCAPTION)
 #ifdef FEAT_MENU
 			+ gui_mswin_get_menu_height(FALSE)
@@ -2521,7 +2521,7 @@ gui_mch_draw_string(
 	    if (text[n] >= 0x80)
 		break;
 
-#ifdef FEAT_DIRECTX
+#if defined(FEAT_DIRECTX)
     /* Quick hack to enable DirectWrite.  To use DirectWrite (antialias), it is
      * required that unicode drawing routine, currently.  So this forces it
      * enabled. */
@@ -2587,11 +2587,12 @@ gui_mch_draw_string(
 	    i += utfc_ptr2len_len(text + i, len - i);
 	    ++clen;
 	}
-#ifdef FEAT_DIRECTX
+#if defined(FEAT_DIRECTX)
 	if (IS_ENABLE_DIRECTX() && font_is_ttf_or_vector)
 	{
+	    /* Add one to "cells" for italics. */
 	    DWriteContext_DrawText(s_dwc, s_hdc, unicodebuf, wlen,
-		    TEXT_X(col), TEXT_Y(row), FILL_X(cells), FILL_Y(1),
+		    TEXT_X(col), TEXT_Y(row), FILL_X(cells + 1), FILL_Y(1),
 		    gui.char_width, gui.currFgColor);
 	}
 	else
@@ -2727,14 +2728,14 @@ gui_mch_get_screen_dimensions(int *screen_w, int *screen_h)
 
     *screen_w = workarea_rect.right - workarea_rect.left
 		- (GetSystemMetrics(SM_CXFRAME) +
-                   GetSystemMetrics(SM_CXPADDEDBORDER)) * 2;
+		   GetSystemMetrics(SM_CXPADDEDBORDER)) * 2;
 
     /* FIXME: dirty trick: Because the gui_get_base_height() doesn't include
      * the menubar for MSwin, we subtract it from the screen height, so that
      * the window size can be made to fit on the screen. */
     *screen_h = workarea_rect.bottom - workarea_rect.top
 		- (GetSystemMetrics(SM_CYFRAME) +
-                   GetSystemMetrics(SM_CXPADDEDBORDER)) * 2
+		   GetSystemMetrics(SM_CXPADDEDBORDER)) * 2
 		- GetSystemMetrics(SM_CYCAPTION)
 #ifdef FEAT_MENU
 		- gui_mswin_get_menu_height(FALSE)
@@ -3366,13 +3367,13 @@ gui_mch_dialog(
 	GetWindowRect(s_hwnd, &rect);
 	maxDialogWidth = rect.right - rect.left
 				   - (GetSystemMetrics(SM_CXFRAME) +
-                                      GetSystemMetrics(SM_CXPADDEDBORDER)) * 2;
+				      GetSystemMetrics(SM_CXPADDEDBORDER)) * 2;
 	if (maxDialogWidth < DLG_MIN_MAX_WIDTH)
 	    maxDialogWidth = DLG_MIN_MAX_WIDTH;
 
 	maxDialogHeight = rect.bottom - rect.top
 				   - (GetSystemMetrics(SM_CYFRAME) +
-                                      GetSystemMetrics(SM_CXPADDEDBORDER)) * 4
+				      GetSystemMetrics(SM_CXPADDEDBORDER)) * 4
 				   - GetSystemMetrics(SM_CYCAPTION);
 	if (maxDialogHeight < DLG_MIN_MAX_HEIGHT)
 	    maxDialogHeight = DLG_MIN_MAX_HEIGHT;
@@ -3529,11 +3530,11 @@ gui_mch_dialog(
     /* Restrict the size to a maximum.  Causes a scrollbar to show up. */
     if (dlgheight > maxDialogHeight)
     {
-        msgheight = msgheight - (dlgheight - maxDialogHeight);
-        dlgheight = maxDialogHeight;
-        scroll_flag = WS_VSCROLL;
-        /* Make sure scrollbar doesn't appear in the middle of the dialog */
-        messageWidth = dlgwidth - DLG_ICON_WIDTH - 3 * dlgPaddingX;
+	msgheight = msgheight - (dlgheight - maxDialogHeight);
+	dlgheight = maxDialogHeight;
+	scroll_flag = WS_VSCROLL;
+	/* Make sure scrollbar doesn't appear in the middle of the dialog */
+	messageWidth = dlgwidth - DLG_ICON_WIDTH - 3 * dlgPaddingX;
     }
 
     add_word(PixelToDialogY(dlgheight));

@@ -2785,7 +2785,7 @@ _OnPaint(
 
 	out_flush();	    /* make sure all output has been processed */
 	(void)BeginPaint(hwnd, &ps);
-#ifdef FEAT_DIRECTX
+#if defined(FEAT_DIRECTX)
 	if (IS_ENABLE_DIRECTX())
 	    DWriteContext_BeginDraw(s_dwc);
 #endif
@@ -2805,7 +2805,7 @@ _OnPaint(
 
 	if (!IsRectEmpty(&ps.rcPaint))
 	{
-#ifdef FEAT_DIRECTX
+#if defined(FEAT_DIRECTX)
 	    if (IS_ENABLE_DIRECTX())
 		DWriteContext_BindDC(s_dwc, s_hdc, &ps.rcPaint);
 #endif
@@ -2814,7 +2814,7 @@ _OnPaint(
 		    ps.rcPaint.bottom - ps.rcPaint.top + 1);
 	}
 
-#ifdef FEAT_DIRECTX
+#if defined(FEAT_DIRECTX)
 	if (IS_ENABLE_DIRECTX())
 	    DWriteContext_EndDraw(s_dwc);
 #endif
@@ -3058,7 +3058,7 @@ gui_mch_insert_lines(
     void
 gui_mch_exit(int rc)
 {
-#ifdef FEAT_DIRECTX
+#if defined(FEAT_DIRECTX)
     DWriteContext_Close(s_dwc);
     DWrite_Final();
     s_dwc = NULL;

@@ -656,10 +656,10 @@ EXTERN long	p_rdt;		/* 'redrawtime' */
 #endif
 EXTERN int	p_remap;	/* 'remap' */
 EXTERN long	p_re;		/* 'regexpengine' */
-EXTERN long	p_report;	/* 'report' */
 #ifdef FEAT_RENDER_OPTIONS
 EXTERN char_u	*p_rop;		/* 'renderoptions' */
 #endif
+EXTERN long	p_report;	/* 'report' */
 #if defined(FEAT_WINDOWS) && defined(FEAT_QUICKFIX)
 EXTERN long	p_pvh;		/* 'previewheight' */
 #endif

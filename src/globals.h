@@ -105,10 +105,6 @@ EXTERN int	exec_from_reg INIT(= FALSE);	/* executing register */
 
 EXTERN int	screen_cleared INIT(= FALSE);	/* screen has been cleared */
 
-#ifdef FEAT_CRYPT
-EXTERN int      use_crypt_method INIT(= 0);
-#endif
-
 /*
  * When '$' is included in 'cpoptions' option set:
  * When a change command is given that deletes only part of a line, a dollar
@@ -533,6 +529,8 @@ EXTERN int	clip_autoselect_plus INIT(= FALSE);
 EXTERN int	clip_autoselectml INIT(= FALSE);
 EXTERN int	clip_html INIT(= FALSE);
 EXTERN regprog_T *clip_exclude_prog INIT(= NULL);
+EXTERN int	clip_did_set_selection INIT(= TRUE);
+EXTERN int	clip_unnamed_saved INIT(= 0);
 #endif
 
 /*
@@ -1335,9 +1333,6 @@ EXTERN HWND	clientWindow INIT(= 0);
 
 #if defined(UNIX) || defined(VMS)
 EXTERN int	term_is_xterm INIT(= FALSE);	/* xterm-like 'term' */
-#endif
-#if defined(UNIX)
-EXTERN int	xterm_conflict_mouse INIT(= FALSE);
 #endif
 
 #ifdef BACKSLASH_IN_FILENAME

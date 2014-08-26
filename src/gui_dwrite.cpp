@@ -377,7 +377,7 @@ public:
     }
 
 private:
-    unsigned long cRefCount_;
+    long cRefCount_;
     IDWriteBitmapRenderTarget* pRenderTarget_;
     IDWriteRenderingParams* pRenderingParams_;
 };
@@ -574,8 +574,8 @@ DWriteContext::SetLOGFONT(const LOGFONTW &logFont, float fontSize)
 		// Convert the cell height (ascent + descent) from design units
 		// to ems.
 		float cellHeight = static_cast<float>(
-			fontMetrics.ascent + fontMetrics.descent) / 
-		    fontMetrics.designUnitsPerEm;
+			fontMetrics.ascent + fontMetrics.descent)
+					       / fontMetrics.designUnitsPerEm;
 
 		// Divide the font size by the cell height to get the font em
 		// size.
