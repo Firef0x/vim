@@ -1,4 +1,4 @@
-*eval.txt*	For Vim version 7.4.  Last change: 2014 Jul 19
+*eval.txt*	For Vim version 7.4.  Last change: 2014 Aug 29
 
 
 		  VIM REFERENCE MANUAL	  by Bram Moolenaar
@@ -1102,9 +1102,9 @@ are known inside the current Vim session.  Using expand() will first try using
 the environment variables known inside the current Vim session.  If that
 fails, a shell will be used to expand the variable.  This can be slow, but it
 does expand all variables that the shell knows about.  Example: >
-	:echo $version
-	:echo expand("$version")
-The first one probably doesn't echo anything, the second echoes the $version
+	:echo $shell
+	:echo expand("$shell")
+The first one probably doesn't echo anything, the second echoes the $shell
 variable (if your shell supports it).
 
 
@@ -1807,7 +1807,8 @@ getchar( [expr])		Number	get one character from the user
 getcharmod( )			Number	modifiers for the last typed character
 getcmdline()			String	return the current command-line
 getcmdpos()			Number	return cursor position in command-line
-getcmdtype()			String	return the current command-line type
+getcmdtype()			String	return current command-line type
+getcmdwintype()			String	return current command-line window type
 getcurpos()			List	position of the cursor
 getcwd()			String	the current working directory
 getfontname( [{name}])		String	name of font being used
@@ -2112,8 +2113,8 @@ argidx()	The result is the current index in the argument list.  0 is
 arglistid([{winnr}, [ {tabnr} ]])
 		Return the argument list ID.  This is a number which
 		identifies the argument list being used.  Zero is used for the
-		global argument list.
-		Return zero if the arguments are invalid.
+		global argument list.  See |arglist|.
+		Return -1 if the arguments are invalid.
 
 		Without arguments use the current window.
 		With {winnr} only use this window in the current tab page.
@@ -2621,7 +2622,7 @@ cursor({list})
 		line.
 		If {col} is zero, the cursor will stay in the current column.
 		If {curswant} is given it is used to set the preferred column
-		for vertical movment.  Otherwise {col} is used.
+		for vertical movement.  Otherwise {col} is used.
 		When 'virtualedit' is used {off} specifies the offset in
 		screen columns from the start of the character.  E.g., a
 		position within a <Tab> or after the last character.
@@ -2912,7 +2913,8 @@ expand({expr} [, {nosuf} [, {list}]])				*expand()*
 <
 		Expand() can also be used to expand variables and environment
 		variables that are only known in a shell.  But this can be
-		slow, because a shell must be started.	See |expr-env-expand|.
+		slow, because a shell may be used to do the expansion.  See
+		|expr-env-expand|.
 		The expanded variable is still handled like a list of file
 		names.	When an environment variable cannot be expanded, it is
 		left unchanged.  Thus ":echo expand('$FOOBAR')" results in
@@ -3349,6 +3351,11 @@ getcmdtype()						*getcmdtype()*
 		Returns an empty string otherwise.
 		Also see |getcmdpos()|, |setcmdpos()| and |getcmdline()|.
 
+getcmdwintype()						*getcmdwintype()*
+		Return the current |command-line-window| type. Possible return
+		values are the same as |getcmdtype()|. Returns an empty string
+		when not in the command-line window.
+
 							*getcurpos()*
 getcurpos()	Get the position of the cursor.  This is like getpos('.'), but
 		includes an extra item in the list:
@@ -3359,7 +3366,7 @@ getcurpos()	Get the position of the cursor.  This is like getpos('.'), but
 			let save_cursor = getcurpos()
 			MoveTheCursorAround
 			call setpos('.', save_cursor)
-
+<
 							*getcwd()*
 getcwd()	The result is a String, which is the name of the current
 		working directory.
@@ -5484,7 +5491,7 @@ setreg({regname}, {value} [,{options}])
 		Returns zero for success, non-zero for failure.
 
 							*E883*
-		Note: you may not use |List| containing more then one item to 
+		Note: you may not use |List| containing more than one item to 
 		      set search and expression registers. Lists containing no 
 		      items act like empty strings.
 
@@ -5634,7 +5641,7 @@ sort({list} [, {func} [, {dict}]])			*sort()* *E702*
 		after Strings, |Lists| after Numbers.  For sorting text in the
 		current buffer use |:sort|.
 
-		When {func} is given and it is is '1' or 'i' then case is
+		When {func} is given and it is '1' or 'i' then case is
 		ignored.
 		
 		When {func} is given and it is 'n' then all items will be
@@ -6086,6 +6093,12 @@ system({expr} [, {input}])				*system()* *E677*
 		list items converted to NULs).  
 		Pipes are not used.
 
+		When prepended by |:silent| the shell will not be set to
+		cooked mode.  This is meant to be used for commands that do
+		not need the user to type.  It avoids stray characters showing
+		up on the screen which require |CTRL-L| to remove. >
+			:silent let f = system('ls *.vim')
+<
 		Note: Use |shellescape()| or |::S| with |expand()| or 
 		|fnamemodify()| to escape special characters in a command 
 		argument.  Newlines in {expr} may cause the command to fail.  
