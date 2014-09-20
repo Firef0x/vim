@@ -12071,7 +12071,8 @@ f_gettabvar(argvars, rettv)
     typval_T	*argvars;
     typval_T	*rettv;
 {
-    tabpage_T	*tp;
+    win_T	*oldcurwin;
+    tabpage_T	*tp, *oldtabpage;
     dictitem_T	*v;
     char_u	*varname;
     int		done = FALSE;
@@ -12083,13 +12084,23 @@ f_gettabvar(argvars, rettv)
     tp = find_tabpage((int)get_tv_number_chk(&argvars[0], NULL));
     if (tp != NULL && varname != NULL)
     {
-	/* look up the variable */
-	v = find_var_in_ht(&tp->tp_vars->dv_hashtab, 0, varname, FALSE);
-	if (v != NULL)
+	/* Set tp to be our tabpage, temporarily.  Also set the window to the
+	 * first window in the tabpage, otherwise the window is not valid. */
+	if (switch_win(&oldcurwin, &oldtabpage, tp->tp_firstwin, tp, TRUE)
+									== OK)
 	{
-	    copy_tv(&v->di_tv, rettv);
-	    done = TRUE;
+	    /* look up the variable */
+	    /* Let gettabvar({nr}, "") return the "t:" dictionary. */
+	    v = find_var_in_ht(&tp->tp_vars->dv_hashtab, 't', varname, FALSE);
+	    if (v != NULL)
+	    {
+		copy_tv(&v->di_tv, rettv);
+		done = TRUE;
+	    }
 	}
+
+	/* restore previous notion of curwin */
+	restore_win(oldcurwin, oldtabpage, TRUE);
     }
 
     if (!done && argvars[2].v_type != VAR_UNKNOWN)
@@ -12224,22 +12235,24 @@ getwinvar(argvars, rettv, off)
     {
 	/* Set curwin to be our win, temporarily.  Also set the tabpage,
 	 * otherwise the window is not valid. */
-	switch_win(&oldcurwin, &oldtabpage, win, tp, TRUE);
-
-	if (*varname == '&')	/* window-local-option */
+	if (switch_win(&oldcurwin, &oldtabpage, win, tp, TRUE) == OK)
 	{
-	    if (get_option_tv(&varname, rettv, 1) == OK)
-		done = TRUE;
-	}
-	else
-	{
-	    /* Look up the variable. */
-	    /* Let getwinvar({nr}, "") return the "w:" dictionary. */
-	    v = find_var_in_ht(&win->w_vars->dv_hashtab, 'w', varname, FALSE);
-	    if (v != NULL)
+	    if (*varname == '&')	/* window-local-option */
 	    {
-		copy_tv(&v->di_tv, rettv);
-		done = TRUE;
+		if (get_option_tv(&varname, rettv, 1) == OK)
+		    done = TRUE;
+	    }
+	    else
+	    {
+		/* Look up the variable. */
+		/* Let getwinvar({nr}, "") return the "w:" dictionary. */
+		v = find_var_in_ht(&win->w_vars->dv_hashtab, 'w',
+							      varname, FALSE);
+		if (v != NULL)
+		{
+		    copy_tv(&v->di_tv, rettv);
+		    done = TRUE;
+		}
 	    }
 	}
 
@@ -17243,34 +17256,33 @@ setwinvar(argvars, rettv, off)
     if (win != NULL && varname != NULL && varp != NULL)
     {
 #ifdef FEAT_WINDOWS
-	if (switch_win(&save_curwin, &save_curtab, win, tp, TRUE) == FAIL)
-	    return;
+	if (switch_win(&save_curwin, &save_curtab, win, tp, TRUE) == OK)
 #endif
-
-	if (*varname == '&')
 	{
-	    long	numval;
-	    char_u	*strval;
-	    int		error = FALSE;
-
-	    ++varname;
-	    numval = get_tv_number_chk(varp, &error);
-	    strval = get_tv_string_buf_chk(varp, nbuf);
-	    if (!error && strval != NULL)
-		set_option_value(varname, numval, strval, OPT_LOCAL);
-	}
-	else
-	{
-	    winvarname = alloc((unsigned)STRLEN(varname) + 3);
-	    if (winvarname != NULL)
+	    if (*varname == '&')
 	    {
-		STRCPY(winvarname, "w:");
-		STRCPY(winvarname + 2, varname);
-		set_var(winvarname, varp, TRUE);
-		vim_free(winvarname);
+		long	numval;
+		char_u	*strval;
+		int		error = FALSE;
+
+		++varname;
+		numval = get_tv_number_chk(varp, &error);
+		strval = get_tv_string_buf_chk(varp, nbuf);
+		if (!error && strval != NULL)
+		    set_option_value(varname, numval, strval, OPT_LOCAL);
+	    }
+	    else
+	    {
+		winvarname = alloc((unsigned)STRLEN(varname) + 3);
+		if (winvarname != NULL)
+		{
+		    STRCPY(winvarname, "w:");
+		    STRCPY(winvarname + 2, varname);
+		    set_var(winvarname, varp, TRUE);
+		    vim_free(winvarname);
+		}
 	    }
 	}
-
 #ifdef FEAT_WINDOWS
 	restore_win(save_curwin, save_curtab, TRUE);
 #endif
@@ -18626,13 +18638,16 @@ get_cmd_output_as_rettv(argvars, rettv, retlist)
 	}
 	else
 	{
+	    size_t len;
+
 	    p = get_tv_string_buf_chk(&argvars[1], buf);
 	    if (p == NULL)
 	    {
 		fclose(fd);
 		goto errret;		/* type error; errmsg already given */
 	    }
-	    if (fwrite(p, STRLEN(p), 1, fd) != 1)
+	    len = STRLEN(p);
+	    if (len > 0 && fwrite(p, len, 1, fd) != 1)
 		err = TRUE;
 	}
 	if (fclose(fd) != 0)
