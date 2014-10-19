@@ -2446,7 +2446,8 @@ SaveConsoleTitleAndIcon(void)
 	return;
 
     /* Extract the first icon contained in the Vim executable. */
-    g_hVimIcon = ExtractIcon(NULL, exe_name, 0);
+    if (mch_icon_load((HANDLE *)&g_hVimIcon) == FAIL || g_hVimIcon == NULL)
+	g_hVimIcon = ExtractIcon(NULL, exe_name, 0);
     if (g_hVimIcon != NULL)
 	g_fCanChangeIcon = TRUE;
 }
@@ -2774,9 +2775,10 @@ fname_case(
 	if (p != NULL)
 	{
 	    char_u	*q;
-	    WCHAR	buf[_MAX_PATH + 2];
+	    WCHAR	buf[_MAX_PATH + 1];
 
-	    wcscpy(buf, p);
+	    wcsncpy(buf, p, _MAX_PATH);
+	    buf[_MAX_PATH] = L'\0';
 	    vim_free(p);
 
 	    if (fname_casew(buf, (len > 0) ? _MAX_PATH : 0) == OK)
@@ -4652,21 +4654,52 @@ mch_call_shell(
     int		x = 0;
     int		tmode = cur_tmode;
 #ifdef FEAT_TITLE
-    char szShellTitle[512];
+    char	szShellTitle[512];
+# ifdef FEAT_MBYTE
+    int		did_set_title = FALSE;
 
     /* Change the title to reflect that we are in a subshell. */
-    if (GetConsoleTitle(szShellTitle, sizeof(szShellTitle) - 4) > 0)
+    if (enc_codepage >= 0 && (int)GetACP() != enc_codepage)
     {
-	if (cmd == NULL)
-	    strcat(szShellTitle, " :sh");
-	else
+	WCHAR szShellTitle[512];
+
+	if (GetConsoleTitleW(szShellTitle,
+				  sizeof(szShellTitle)/sizeof(WCHAR) - 4) > 0)
 	{
-	    strcat(szShellTitle, " - !");
-	    if ((strlen(szShellTitle) + strlen(cmd) < sizeof(szShellTitle)))
-		strcat(szShellTitle, cmd);
+	    if (cmd == NULL)
+		wcscat(szShellTitle, L" :sh");
+	    else
+	    {
+		WCHAR *wn = enc_to_utf16(cmd, NULL);
+
+		if (wn != NULL)
+		{
+		    wcscat(szShellTitle, L" - !");
+		    if ((wcslen(szShellTitle) + wcslen(wn) <
+					  sizeof(szShellTitle)/sizeof(WCHAR)))
+			wcscat(szShellTitle, wn);
+		    SetConsoleTitleW(szShellTitle);
+		    vim_free(wn);
+		    did_set_title = TRUE;
+		}
+	    }
 	}
-	mch_settitle(szShellTitle, NULL);
     }
+    if (!did_set_title)
+# endif
+	/* Change the title to reflect that we are in a subshell. */
+	if (GetConsoleTitle(szShellTitle, sizeof(szShellTitle) - 4) > 0)
+	{
+	    if (cmd == NULL)
+		strcat(szShellTitle, " :sh");
+	    else
+	    {
+		strcat(szShellTitle, " - !");
+		if ((strlen(szShellTitle) + strlen(cmd) < sizeof(szShellTitle)))
+		    strcat(szShellTitle, cmd);
+	    }
+	    SetConsoleTitle(szShellTitle);
+	}
 #endif
 
     out_flush();

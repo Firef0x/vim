@@ -1,4 +1,4 @@
-*todo.txt*      For Vim version 7.4.  Last change: 2014 Sep 19
+*todo.txt*      For Vim version 7.4.  Last change: 2014 Oct 15
 
 
 		  VIM REFERENCE MANUAL	  by Bram Moolenaar
@@ -35,6 +35,8 @@ not be repeated below, unless there is extra information.
 -------------------- Known bugs and current work -----------------------
 
 Regexp problems:
+- The NFA engine does not implement the time limit passed to
+  nfa_regexec_multi()
 - Bug with pattern: '\vblock (\d+)\.\n.*\d+%(\1)@<!\.$'
   (Lech Lorens, 2014 Feb 3)
 - Issue 164: freeze on regexp search.
@@ -65,23 +67,6 @@ Patch to avoid problems with encoding conversion with diff.vim.
 (Yasuhiro Matsumoto, 2014 Sep 1.
 Depends on current language, language of file can be different.
 
-Patch for C/C++ syntax string handling. (Brian Bi, 2014 Sep 13)
-
-When using a visual selection of multiple words and doing CTRL-W_] it jumps to
-the tag matching the word under the cursor, not the selected text.
-(Patrick hemmer)
-Patch by Christian, 2014 Aug 8.
-
-Completion for :buf does not use 'wildignorecase'. (Akshay H, 2014 May 31)
-
-'backupcopy' should be global-local, so that some files can be written in a
-different way.  Patch by Christian, 2014 Sep 17.
-
-Patch to handle list with some items locked. (ZyX, 2014 Aug 17)
-Prefer the second solution.
-
-Issue 252.  Patch by Christian, 2014 Aug 26.
-
 ":cd C:\Windows\System32\drivers\etc*" does not work, even though the
 directory exists. (Sergio Gallelli, 2013 Dec 29)
 
@@ -92,18 +77,51 @@ Patch by Marcin Szamotulski to add count to :close (2014 Aug 10, update Aug
     Make ":-1close" close the previous window.
 Doesn't look right, asked for updates.
 
-Patch to add a special key name for K_CURSORHOLD. (Hirohito Higashi, 2014 Aug
-10)
-
 The entries added by matchaddpos() are returned by getmatches() but can't be
 set with setmatches(). (lcd47, 2014 Jun 29)
+
+Patch to fix that 0x80 in abbreviation isn't handled correctly.
+(Christian Brabandt, 2014 Oct 1)
+
+Check for valid yank reg seems wrong.  Patch by Zyx, 2014 Oct 12.
+
+":sign-jump" uses first window in buffer instead of current window.
+Patch by James McCoy, 2013 Nov 22.  Update 2014 Oct 5.
+
+Patch to fix issue 57, on the issue.
+
+Patch for issue 101, maintainer unreachable.
+
+Gvim: when both Tab and CTRL-I are mapped, use CTRL-I not for Tab.
+
+Patch to fix that last_changedtick is not update on saving. (Christian
+Brabandt, 2014 Oct 10, second one)
+
+substitute() can be slow with long strings.  Patch by Ozaki Kiichi, 2014 Oct
+12.
+
+Remove restriction in NSIS installer that the end of the path must be "Vim".
+(Tim Lebedkov, 2014 Sep 24) Again Oct 12.
 
 Problem using ":try" inside ":execute". (ZyX, 2013 Sep 15)
 
 Python: ":py raw_input('prompt')" doesn't work. (Manu Hack)
 
+'foldexpr' applies to help. (Paul Marshall, 2014 Sep 24)
+
+Patch to fix issue 203. (Christian Brabandt, 2014 Oct 8)
+
+Patch to fix issue 253. (Christian Brabandt, 2014 Oct 8)
+
+Patch to fix issue 78. (Christian Brabandt, 2014 Oct 8)
+
+Patch to fix leak in map() with error. (Christian Brabandt, 2014 Oct 11)
+
 Value returned by virtcol() changes depending on how lines wrap.  This is
 inconsistent with the documentation.
+
+On MS-Windows running tests with Mercurial has problems when the input files
+are changed. (Ken Takata, Taro Muraoka, 2014 Sep 25)
 
 MS-Windows: Crash opening very long file name starting with "\\".
 (Christian Brock, 2012 Jun 29)
@@ -111,17 +129,29 @@ MS-Windows: Crash opening very long file name starting with "\\".
 ml_updatechunk() is slow when retrying for another encoding. (John Little,
 2014 Sep 11)
 
-Syntax highlighting slow (hangs) in SASS file. (Niek Bosch, 2013 Aug 21)
+Make comments in the test Makefile silent. (Kartik Agaram, 2014 Sep 24)
 
-Patch to allow for a different icon on MS-Windows. (Yasuhiro Matsumoto, 2014
-Sep 7).
+When in 'comments' "n:x" follows after three-part comment directly it repeats
+any one-character from the previous line. (Kartik Agaram, 2014 Sep 19)
+
+Syntax highlighting slow (hangs) in SASS file. (Niek Bosch, 2013 Aug 21)
 
 Adding "~" to 'cdpath' doesn't work for completion?  (Davido, 2013 Aug 19)
 
 Patch to make closed folds line up. (Charles Campbell, 2014 Sep 12)
 
+Patch for building a 32bit Vim with 64bit MingW compiler.
+(Michael Soyka, 2014 Oct 15)
+
+Delete old code in os_msdos.c, mch_FullName().
+
 "hi link" does not respect groups with GUI settings only. (Mark Lodato, 2014
 Jun 8)
+
+Patch to switch to the BT regexp engine when the NFA engine uses many states.
+(Christian Brabandt, 2014 Oct 3)
+
+Patch to add argument to :cquit. (Thinca, 2014 Oct 12)
 
 No error for missing endwhile. (ZyX, 2014 Mar 20)
 
@@ -164,6 +194,8 @@ from?
 
 Problem with upwards search on Windows (works OK on Linux). (Brett Stahlman,
 2014 Jun 8)
+
+Patch to load TCL dynamically. (Ken Takata, 2014 Sep 20)
 
 Include a plugin manager with Vim? Neobundle seems to be the best currently.
 Long message about this from ZyX, 2014 Mar 23.  And following replies.
@@ -314,9 +346,6 @@ buffer. (2013 Dec 9)
 Patch for drag&drop reordering of GUI tab pages reordering.
 (Ken Takata, 2013 Nov 22, second one, also by Masamichi Abe)
 
-":sign-jump" uses first window in buffer instead of current window.
-Patch by James McCoy, 2013 Nov 22.
-
 GTK: problem with 'L' in 'guioptions' changing the window width.
 (Aaron Cornelius, 2012 Feb 6)
 
@@ -390,7 +419,7 @@ Patch to allow setting w:quickfix_title via setqflist() and setloclist()
 functions. (Christian Brabandt, 2013 May 8, update May 21)
 Patch to add getlocstack() / setlocstack(). (Christian Brabandt, 2013 May 14)
 Second one. Update May 22.
-Update by Daniel Hahler, 2014 Jul 4, Aug 14.
+Update by Daniel Hahler, 2014 Jul 4, Aug 14, Oct 14, Oct 15.
 
 Patch to make fold updates much faster. (Christian Brabandt, 2012 Dec)
 
@@ -526,6 +555,10 @@ URXVT:
 - will get stuck if byte sequence does not contain the expected semicolon.
 - Use urxvt mouse support also in xterm.  Explanations:
   http://www.midnight-commander.org/ticket/2662
+
+Patch to have the fold and sign column and at the last line of the buffer.
+(Marco Hinz, 2014 Sep 25)
+Alternate suggestion: let all columns continue, also the number column.
 
 Patch to add tests for if_xcmdsrv.c., Jul 8, need some more work. (Brian Burns)
 New tests Jul 13.   Update Jul 17.  Discussion Jul 18.
@@ -983,6 +1016,12 @@ to avoid changing 'eventignore'?
 Patch for displaying 0x200c and 0x200d. (Ali Gholami Rudi, 2009 May 6)
 Probably needs a bit of work.
 
+Patch to add farsi handling to arabic.c (Ali Gholami Rudi, 2009 May 2)
+Added test, updates, June 23.
+Updated for 7.4: http://litcave.rudi.ir/farsi_vim.diff
+With modification for Tatweel character: https://dpaste.de/VmFw
+Remark from Ameretat Reith (2014 Oct 13)
+
 List of encoding aliases. (Takao Fujiwara, 2009 Jul 18)
 Are they all OK?  Update Jul 22.
 
@@ -1000,10 +1039,6 @@ on the first character. (John Beckett, 2010 Aug 7)
 
 Setting 'tags' to "tagsdir/*" does not find "tagsdir/tags". (Steven K. Wong,
 2009 Jul 18)
-
-Patch to add farsi handling to arabic.c (Ali Gholami Rudi, 2009 May 2)
-Added test, updates, June 23.
-Updated for 7.4: http://litcave.rudi.ir/farsi_vim.diff
 
 Patch to add "focusonly" to 'scrollopt', so that scrollbind also applies in
 window that doesn't have focus. (Jonathon Mah, 2009 Jan 12)
@@ -1936,7 +1971,7 @@ More patches:
 -   testdir/Make_dos_sh.mak for running tests with MingW. (Bill Mccarthy, 2008
     Sep 13)
 -   Patch for adding "space" item in 'listchars'. (Jérémie Roquet, 2009 Oct 29,
-    Docs patch Oct 30, update David Burgin (glts) 2013 Aug 24)
+    Docs patch Oct 30, update David Burgin (glts) 2013 Aug 24, 2014 Oct 10)
 -   Replace ccomplete.vim by cppcomplete.vim from www.vim.org?  script 1520 by
     Vissale Neang.  (Martin Stubenschrott) Asked Vissale to make the scripts
     more friendly for the Vim distribution.
