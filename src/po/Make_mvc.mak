@@ -63,7 +63,7 @@ MOFILES = \
 PACKAGE = vim
 
 # Correct the following line for the directory where gettext et al is installed
-GETTEXT_PATH = H:\gettext.0.14.4\bin
+GETTEXT_PATH = E:\PortableApps\PoeditPortable\App\Poedit\GettextTools\bin
 
 MSGFMT = $(GETTEXT_PATH)\msgfmt
 XGETTEXT = $(GETTEXT_PATH)\xgettext
