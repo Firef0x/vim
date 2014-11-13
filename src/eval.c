@@ -19576,7 +19576,7 @@ f_winrestview(argvars, rettv)
 # endif
 	changed_window_setting();
 
-	if (curwin->w_topline == 0)
+	if (curwin->w_topline <= 0)
 	    curwin->w_topline = 1;
 	if (curwin->w_topline > curbuf->b_ml.ml_line_count)
 	    curwin->w_topline = curbuf->b_ml.ml_line_count;
@@ -19689,6 +19689,7 @@ f_writefile(argvars, rettv)
     typval_T	*rettv;
 {
     int		binary = FALSE;
+    int		append = FALSE;
     char_u	*fname;
     FILE	*fd;
     int		ret = 0;
@@ -19704,14 +19705,19 @@ f_writefile(argvars, rettv)
     if (argvars[0].vval.v_list == NULL)
 	return;
 
-    if (argvars[2].v_type != VAR_UNKNOWN
-			      && STRCMP(get_tv_string(&argvars[2]), "b") == 0)
-	binary = TRUE;
+    if (argvars[2].v_type != VAR_UNKNOWN)
+    {
+	if (vim_strchr(get_tv_string(&argvars[2]), 'b') != NULL)
+	    binary = TRUE;
+	if (vim_strchr(get_tv_string(&argvars[2]), 'a') != NULL)
+	    append = TRUE;
+    }
 
     /* Always open the file in binary mode, library functions have a mind of
      * their own about CR-LF conversion. */
     fname = get_tv_string(&argvars[1]);
-    if (*fname == NUL || (fd = mch_fopen((char *)fname, WRITEBIN)) == NULL)
+    if (*fname == NUL || (fd = mch_fopen((char *)fname,
+				      append ? APPENDBIN : WRITEBIN)) == NULL)
     {
 	EMSG2(_(e_notcreate), *fname == NUL ? (char_u *)_("<empty>") : fname);
 	ret = -1;
@@ -25076,6 +25082,7 @@ do_string_sub(str, pat, sub, flags)
     int		i;
     int		do_all;
     char_u	*tail;
+    char_u	*end;
     garray_T	ga;
     char_u	*ret;
     char_u	*save_cpo;
@@ -25094,6 +25101,7 @@ do_string_sub(str, pat, sub, flags)
     if (regmatch.regprog != NULL)
     {
 	tail = str;
+	end = str + STRLEN(str);
 	while (vim_regexec_nl(&regmatch, str, (colnr_T)(tail - str)))
 	{
 	    /* Skip empty match except for first match. */
@@ -25120,7 +25128,7 @@ do_string_sub(str, pat, sub, flags)
 	     * - The text after the match.
 	     */
 	    sublen = vim_regsub(&regmatch, sub, tail, FALSE, TRUE, FALSE);
-	    if (ga_grow(&ga, (int)(STRLEN(tail) + sublen -
+	    if (ga_grow(&ga, (int)((end - tail) + sublen -
 			    (regmatch.endp[0] - regmatch.startp[0]))) == FAIL)
 	    {
 		ga_clear(&ga);

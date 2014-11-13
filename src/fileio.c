@@ -2958,6 +2958,7 @@ check_for_cryptkey(cryptkey, ptr, sizep, filesizep, newfile, fname, did_ask)
 		 * Happens when retrying to detect encoding. */
 		smsg((char_u *)_(need_key_msg), fname);
 		msg_scroll = TRUE;
+		crypt_check_method(method);
 		cryptkey = crypt_get_key(newfile, FALSE);
 		*did_ask = TRUE;
 
@@ -4877,6 +4878,13 @@ restore_backup:
 	    )
     {
 	unchanged(buf, TRUE);
+#ifdef FEAT_AUTOCMD
+	/* buf->b_changedtick is always incremented in unchanged() but that
+	 * should not trigger a TextChanged event. */
+	if (last_changedtick + 1 == buf->b_changedtick
+					       && last_changedtick_buf == buf)
+	    last_changedtick = buf->b_changedtick;
+#endif
 	u_unchanged(buf);
 	u_update_save_nr(buf);
     }
