@@ -3368,11 +3368,11 @@ set_context_for_expression(xp, arg, cmdidx)
 	    got_eq = TRUE;
 	    xp->xp_context = EXPAND_EXPRESSION;
 	}
-	else if (c == '<'
+	else if ((c == '<' || c == '#')
 		&& xp->xp_context == EXPAND_FUNCTIONS
 		&& vim_strchr(xp->xp_pattern, '(') == NULL)
 	{
-	    /* Function name can start with "<SNR>" */
+	    /* Function name can start with "<SNR>" and contain '#'. */
 	    break;
 	}
 	else if (cmdidx != CMD_let || got_eq)
@@ -12008,6 +12008,8 @@ f_getreg(argvars, rettv)
 	rettv->v_type = VAR_LIST;
 	rettv->vval.v_list = (list_T *)get_reg_contents(regname,
 				      (arg2 ? GREG_EXPR_SRC : 0) | GREG_LIST);
+	if (rettv->vval.v_list != NULL)
+	    ++rettv->vval.v_list->lv_refcount;
     }
     else
     {
