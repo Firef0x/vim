@@ -2951,7 +2951,7 @@ set_var_lval(lp, endp, rettv, copy, op)
 	/*
 	 * Check whether any of the list items is locked
 	 */
-	for (ri = rettv->vval.v_list->lv_first; ri != NULL; )
+	for (ri = rettv->vval.v_list->lv_first; ri != NULL && ll_li != NULL; )
 	{
 	    if (tv_check_lock(ll_li->li_tv.v_lock, lp->ll_name))
 		return;
@@ -7867,7 +7867,7 @@ get_env_tv(arg, rettv, evaluate)
     if (evaluate)
     {
 	if (len == 0)
-           return FAIL; /* can't be an environment variable */
+	    return FAIL; /* invalid empty name */
 
 	cc = name[len];
 	name[len] = NUL;
@@ -10117,14 +10117,18 @@ f_eval(argvars, rettv)
     typval_T	*argvars;
     typval_T	*rettv;
 {
-    char_u	*s;
+    char_u	*s, *p;
 
     s = get_tv_string_chk(&argvars[0]);
     if (s != NULL)
 	s = skipwhite(s);
 
+    p = s;
     if (s == NULL || eval1(&s, rettv, TRUE) == FAIL)
     {
+	if (p != NULL && !aborting())
+	    EMSG2(_(e_invexpr2), p);
+	need_clr_eos = FALSE;
 	rettv->v_type = VAR_NUMBER;
 	rettv->vval.v_number = 0;
     }
@@ -10720,18 +10724,20 @@ filter_map(argvars, rettv, map)
 	    {
 		if (!HASHITEM_EMPTY(hi))
 		{
+		    int r;
+
 		    --todo;
 		    di = HI2DI(hi);
 		    if (tv_check_lock(di->di_tv.v_lock,
 						     (char_u *)_(arg_errmsg)))
 			break;
 		    vimvars[VV_KEY].vv_str = vim_strsave(di->di_key);
-		    if (filter_map_one(&di->di_tv, expr, map, &rem) == FAIL
-								  || did_emsg)
+		    r = filter_map_one(&di->di_tv, expr, map, &rem);
+		    clear_tv(&vimvars[VV_KEY].vv_tv);
+		    if (r == FAIL || did_emsg)
 			break;
 		    if (!map && rem)
 			dictitem_remove(d, di);
-		    clear_tv(&vimvars[VV_KEY].vv_tv);
 		}
 	    }
 	    hash_unlock(ht);
@@ -10782,6 +10788,7 @@ filter_map_one(tv, expr, map, remp)
     if (*s != NUL)  /* check for trailing chars after expr */
     {
 	EMSG2(_(e_invexpr2), s);
+	clear_tv(&rettv);
 	goto theend;
     }
     if (map)
@@ -11934,7 +11941,8 @@ getpos_both(argvars, rettv, getcurpos)
 #endif
 							      (varnumber_T)0);
 	if (getcurpos)
-	    list_append_number(l, (varnumber_T)curwin->w_curswant + 1);
+	    list_append_number(l, curwin->w_curswant == MAXCOL ?
+		    (varnumber_T)MAXCOL : (varnumber_T)curwin->w_curswant + 1);
     }
     else
 	rettv->vval.v_number = FALSE;
@@ -22280,14 +22288,11 @@ ex_function(eap)
 		if (*p == '!')
 		    p = skipwhite(p + 1);
 		p += eval_fname_script(p);
-		if (ASCII_ISALPHA(*p))
+		vim_free(trans_function_name(&p, TRUE, 0, NULL));
+		if (*skipwhite(p) == '(')
 		{
-		    vim_free(trans_function_name(&p, TRUE, 0, NULL));
-		    if (*skipwhite(p) == '(')
-		    {
-			++nesting;
-			indent += 2;
-		    }
+		    ++nesting;
+		    indent += 2;
 		}
 	    }
 
@@ -24762,7 +24767,7 @@ repeat:
 	    p = alloc(_MAX_PATH + 1);
 	    if (p != NULL)
 	    {
-		if (GetLongPathName(*fnamep, p, MAXPATHL))
+		if (GetLongPathName(*fnamep, p, _MAX_PATH))
 		{
 		    vim_free(*bufp);
 		    *bufp = *fnamep = p;

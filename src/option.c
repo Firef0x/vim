@@ -5575,6 +5575,7 @@ set_string_option_direct(name, opt_idx, val, opt_flags, set_sid)
 	if (idx < 0)	/* not found (should not happen) */
 	{
 	    EMSG2(_(e_intern2), "set_string_option_direct()");
+	    EMSG2(_("For option %s"), name);
 	    return;
 	}
     }
@@ -6706,15 +6707,16 @@ did_set_string_option(opt_idx, varp, new_value_alloced, oldval, errbuf,
 #ifdef FEAT_SPELL
     /* When 'spelllang' or 'spellfile' is set and there is a window for this
      * buffer in which 'spell' is set load the wordlists. */
-    else if (varp == &(curbuf->b_s.b_p_spl) || varp == &(curbuf->b_s.b_p_spf))
+    else if (varp == &(curwin->w_s->b_p_spl)
+	    || varp == &(curwin->w_s->b_p_spf))
     {
 	win_T	    *wp;
 	int	    l;
 
-	if (varp == &(curbuf->b_s.b_p_spf))
+	if (varp == &(curwin->w_s->b_p_spf))
 	{
-	    l = (int)STRLEN(curbuf->b_s.b_p_spf);
-	    if (l > 0 && (l < 4 || STRCMP(curbuf->b_s.b_p_spf + l - 4,
+	    l = (int)STRLEN(curwin->w_s->b_p_spf);
+	    if (l > 0 && (l < 4 || STRCMP(curwin->w_s->b_p_spf + l - 4,
 								".add") != 0))
 		errmsg = e_invarg;
 	}

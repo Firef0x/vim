@@ -798,6 +798,7 @@ extern char *(*dyn_libintl_textdomain)(const char *domainname);
 #define EXPAND_HISTORY		41
 #define EXPAND_USER		42
 #define EXPAND_SYNTIME		43
+#define EXPAND_USER_ADDR_TYPE	44
 
 /* Values for exmode_active (0 is no exmode) */
 #define EXMODE_NORMAL		1
@@ -1998,7 +1999,7 @@ typedef int VimClipboard;	/* This is required for the prototypes. */
 
 #ifndef FEAT_VIRTUALEDIT
 # define getvvcol(w, p, s, c, e) getvcol(w, p, s, c, e)
-# define virtual_active() 0
+# define virtual_active() FALSE
 # define virtual_op FALSE
 #endif
 
@@ -2277,7 +2278,7 @@ typedef int VimClipboard;	/* This is required for the prototypes. */
 #define AUTOLOAD_CHAR '#'
 
 #ifdef FEAT_EVAL
-# define SET_NO_HLSEARCH(flag) no_hlsearch = (flag); set_vim_var_nr(VV_HLSEARCH, !no_hlsearch)
+# define SET_NO_HLSEARCH(flag) no_hlsearch = (flag); set_vim_var_nr(VV_HLSEARCH, !no_hlsearch && p_hls)
 #else
 # define SET_NO_HLSEARCH(flag) no_hlsearch = (flag)
 #endif

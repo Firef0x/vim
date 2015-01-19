@@ -11,6 +11,7 @@
 
 static int path_is_url __ARGS((char_u *p));
 #if defined(FEAT_WINDOWS) || defined(PROTO)
+static void cmd_with_count __ARGS((char *cmd, char_u *bufp, size_t bufsize, long Prenum));
 static void win_init __ARGS((win_T *newp, win_T *oldp, int flags));
 static void win_init_some __ARGS((win_T *newp, win_T *oldp));
 static void frame_comp_pos __ARGS((frame_T *topfrp, int *row, int *col));
@@ -167,10 +168,7 @@ do_window(nchar, Prenum, xchar)
     case '^':
 		CHECK_CMDWIN
 		reset_VIsual_and_resel();	/* stop Visual mode */
-		STRCPY(cbuf, "split #");
-		if (Prenum)
-		    vim_snprintf((char *)cbuf + 7, sizeof(cbuf) - 7,
-							       "%ld", Prenum);
+		cmd_with_count("split #", cbuf, sizeof(cbuf), Prenum);
 		do_cmdline_cmd(cbuf);
 		break;
 
@@ -199,14 +197,16 @@ newwindow:
     case Ctrl_Q:
     case 'q':
 		reset_VIsual_and_resel();	/* stop Visual mode */
-		do_cmdline_cmd((char_u *)"quit");
+		cmd_with_count("quit", cbuf, sizeof(cbuf), Prenum);
+		do_cmdline_cmd(cbuf);
 		break;
 
 /* close current window */
     case Ctrl_C:
     case 'c':
 		reset_VIsual_and_resel();	/* stop Visual mode */
-		do_cmdline_cmd((char_u *)"close");
+		cmd_with_count("close", cbuf, sizeof(cbuf), Prenum);
+		do_cmdline_cmd(cbuf);
 		break;
 
 #if defined(FEAT_WINDOWS) && defined(FEAT_QUICKFIX)
@@ -235,7 +235,8 @@ newwindow:
     case 'o':
 		CHECK_CMDWIN
 		reset_VIsual_and_resel();	/* stop Visual mode */
-		do_cmdline_cmd((char_u *)"only");
+		cmd_with_count("only", cbuf, sizeof(cbuf), Prenum);
+		do_cmdline_cmd(cbuf);
 		break;
 
 /* cursor to next window with wrap around */
@@ -624,6 +625,124 @@ wingotofile:
 }
 
 /*
+ * Figure out the address type for ":wnncmd".
+ */
+    void
+get_wincmd_addr_type(arg, eap)
+    char_u	*arg;
+    exarg_T	*eap;
+{
+    switch (*arg)
+    {
+    case 'S':
+    case Ctrl_S:
+    case 's':
+    case Ctrl_N:
+    case 'n':
+    case 'j':
+    case Ctrl_J:
+    case 'k':
+    case Ctrl_K:
+    case 'T':
+    case Ctrl_R:
+    case 'r':
+    case 'R':
+    case 'K':
+    case 'J':
+    case '+':
+    case '-':
+    case Ctrl__:
+    case '_':
+    case '|':
+    case ']':
+    case Ctrl_RSB:
+    case 'g':
+    case Ctrl_G:
+#ifdef FEAT_VERTSPLIT
+    case Ctrl_V:
+    case 'v':
+    case 'h':
+    case Ctrl_H:
+    case 'l':
+    case Ctrl_L:
+    case 'H':
+    case 'L':
+    case '>':
+    case '<':
+#endif
+#if defined(FEAT_QUICKFIX)
+    case '}':
+#endif
+#ifdef FEAT_SEARCHPATH
+    case 'f':
+    case 'F':
+    case Ctrl_F:
+#endif
+#ifdef FEAT_FIND_ID
+    case 'i':
+    case Ctrl_I:
+    case 'd':
+    case Ctrl_D:
+#endif
+		/* window size or any count */
+		eap->addr_type = ADDR_LINES;
+		break;
+
+    case Ctrl_HAT:
+    case '^':
+		/* buffer number */
+		eap->addr_type = ADDR_BUFFERS;
+		break;
+
+    case Ctrl_Q:
+    case 'q':
+    case Ctrl_C:
+    case 'c':
+    case Ctrl_O:
+    case 'o':
+    case Ctrl_W:
+    case 'w':
+    case 'W':
+    case 'x':
+    case Ctrl_X:
+		/* window number */
+		eap->addr_type = ADDR_WINDOWS;
+		break;
+
+#if defined(FEAT_QUICKFIX)
+    case Ctrl_Z:
+    case 'z':
+    case 'P':
+#endif
+    case 't':
+    case Ctrl_T:
+    case 'b':
+    case Ctrl_B:
+    case 'p':
+    case Ctrl_P:
+    case '=':
+    case CAR:
+		/* no count */
+		eap->addr_type = 0;
+		break;
+    }
+}
+
+    static void
+cmd_with_count(cmd, bufp, bufsize, Prenum)
+    char	*cmd;
+    char_u	*bufp;
+    size_t	bufsize;
+    long	Prenum;
+{
+    size_t	len = STRLEN(cmd);
+
+    STRCPY(bufp, cmd);
+    if (Prenum > 0)
+	vim_snprintf((char *)bufp + len, bufsize - len, "%ld", Prenum);
+}
+
+/*
  * split the current window, implements CTRL-W s and :split
  *
  * "size" is the height or width for the new window, 0 to use half of current
@@ -796,7 +915,7 @@ win_split_ins(size, flags, new_wp, dir)
 		if (frp->fr_win != oldwin && frp->fr_win != NULL
 			&& (frp->fr_win->w_width > new_size
 			    || frp->fr_win->w_width > oldwin->w_width
-						   - new_size - STATUS_HEIGHT))
+							      - new_size - 1))
 		{
 		    do_equal = TRUE;
 		    break;

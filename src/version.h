@@ -22,8 +22,8 @@
 #define VIM_VERSION_BUILD		 280
 #define VIM_VERSION_BUILD_BCD		0x118
 #define VIM_VERSION_BUILD_STR		"280"
-#define VIM_VERSION_PATCHLEVEL		 0
-#define VIM_VERSION_PATCHLEVEL_STR	"0"
+#define VIM_VERSION_PATCHLEVEL		 582
+#define VIM_VERSION_PATCHLEVEL_STR	"582"
 /* Used by MacOS port should be one of: development, alpha, beta, final */
 #define VIM_VERSION_RELEASE		final
 
