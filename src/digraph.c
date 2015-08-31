@@ -2326,6 +2326,9 @@ printdigraph(dp)
 	*p++ = dp->char1;
 	*p++ = dp->char2;
 	*p++ = ' ';
+	*p = NUL;
+	msg_outtrans(buf);
+	p = buf;
 #ifdef FEAT_MBYTE
 	if (has_mbyte)
 	{
@@ -2337,6 +2340,9 @@ printdigraph(dp)
 	else
 #endif
 	    *p++ = (char_u)dp->result;
+	*p = NUL;
+	msg_outtrans_attr(buf,  hl_attr(HLF_D));
+	p = buf;
 	if (char2cells(dp->result) == 1)
 	    *p++ = ' ';
 	vim_snprintf((char *)p, sizeof(buf) - (p - buf), " %3d", dp->result);

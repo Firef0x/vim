@@ -33,6 +33,7 @@ endif
 setlocal include=\\<\\(use\\\|require\\)\\>
 setlocal includeexpr=substitute(substitute(substitute(v:fname,'::','/','g'),'->\*','',''),'$','.pm','')
 setlocal define=[^A-Za-z_]
+setlocal iskeyword+=:
 
 " The following line changes a global variable but is necessary to make
 " gf and similar commands work.  The change to iskeyword was incorrect.
@@ -40,7 +41,6 @@ setlocal define=[^A-Za-z_]
 " problem for you, add an after/ftplugin/perl.vim file that contains
 "       set isfname-=:
 set isfname+=:
-set iskeyword+=:
 
 " Set this once, globally.
 if !exists("perlpath")
