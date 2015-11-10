@@ -2981,8 +2981,10 @@ static struct vimoption
     p_term("t_ce", T_CE)
     p_term("t_cl", T_CL)
     p_term("t_cm", T_CM)
+    p_term("t_Ce", T_UCE)
     p_term("t_Co", T_CCO)
     p_term("t_CS", T_CCS)
+    p_term("t_Cs", T_UCS)
     p_term("t_cs", T_CS)
 #ifdef FEAT_VERTSPLIT
     p_term("t_CV", T_CSV)
@@ -4881,9 +4883,10 @@ do_set(arg, opt_flags)
 				{
 				    i = (int)STRLEN(origval);
 				    /* strip a trailing comma, would get 2 */
-				    if (comma && (flags & P_ONECOMMA) && i > 1
-					            && origval[i - 1] == ','
-						    && origval[i - 2] != '\\')
+				    if (comma && i > 1
+					  && (flags & P_ONECOMMA) == P_ONECOMMA
+					  && origval[i - 1] == ','
+					  && origval[i - 2] != '\\')
 					i--;
 				    mch_memmove(newval + i + comma, newval,
 							  STRLEN(newval) + 1);
