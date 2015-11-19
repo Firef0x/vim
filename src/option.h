@@ -214,7 +214,8 @@
 #define SHM_ATTENTION	'A'		/* no ATTENTION messages */
 #define SHM_INTRO	'I'		/* intro messages */
 #define SHM_COMPLETIONMENU  'c'		/* completion menu messages */
-#define SHM_ALL		"rmfixlnwaWtToOsAIc" /* all possible flags for 'shm' */
+#define SHM_RECORDING	'q'		/* short recording message */
+#define SHM_ALL		"rmfixlnwaWtToOsAIcq" /* all possible flags for 'shm' */
 
 /* characters for p_go: */
 #define GO_ASEL		'a'		/* autoselect */
@@ -690,7 +691,7 @@ EXTERN char_u	*p_cdpath;	/* 'cdpath' */
 EXTERN char_u	*p_perldll;	/* 'perldll' */
 #endif
 #if defined(DYNAMIC_PYTHON3) && !defined(WIN3264)
-EXTERN char_u	*p_py3dll;	/* 'python3dll' */
+EXTERN char_u	*p_py3dll;	/* 'pythonthreedll' */
 #endif
 #if defined(DYNAMIC_PYTHON) && !defined(WIN3264)
 EXTERN char_u	*p_pydll;	/* 'pythondll' */
