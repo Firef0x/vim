@@ -281,6 +281,12 @@ CC=
 #GUI_LIB_LOC = -L/usr/X11R6/lib
 # }}}
 
+# Defaults used when auto/config.mk does not exist.
+srcdir = .
+VIMNAME = vim
+EXNAME = ex
+VIEWNAME = view
+
 ######################## auto/config.mk ######################## {{{1
 # At this position auto/config.mk is included. When starting from the
 # toplevel Makefile it is almost empty. After running auto/configure it
@@ -1199,10 +1205,10 @@ NONE_INSTALL = install_normal
 
 ### GTK GUI
 GTK_SRC		= gui.c gui_gtk.c gui_gtk_x11.c pty.c gui_gtk_f.c \
-			gui_beval.c
+			gui_beval.c $(GRESOURCE_SRC)
 GTK_OBJ		= objects/gui.o objects/gui_gtk.o objects/gui_gtk_x11.o \
 			objects/pty.o objects/gui_gtk_f.o \
-			objects/gui_beval.o
+			objects/gui_beval.o $(GRESOURCE_OBJ)
 GTK_DEFS	= -DFEAT_GUI_GTK $(NARROW_PROTO)
 GTK_IPATH	= $(GUI_INC_LOC)
 GTK_LIBS_DIR	= $(GUI_LIB_LOC)
@@ -1527,7 +1533,8 @@ TAGS_SRC = *.c *.cpp if_perl.xs
 
 EXTRA_SRC = hangulin.c if_lua.c if_mzsch.c auto/if_perl.c if_perlsfio.c \
 	    if_python.c if_python3.c if_tcl.c if_ruby.c if_sniff.c \
-	    gui_beval.c workshop.c wsdebug.c integration.c netbeans.c
+	    gui_beval.c workshop.c wsdebug.c integration.c netbeans.c \
+	    $(GRESOURCE_SRC)
 
 # Unittest files
 MEMFILE_TEST_SRC = memfile_test.c
@@ -1869,6 +1876,9 @@ os_vms.pro: os_vms.c
 if_perl.pro: auto/if_perl.c
 	$(CPROTO) -DFEAT_GUI auto/if_perl.c | sed "/_VI/d" > proto/$@
 
+gui_gtk_gresources.pro: auto/gui_gtk_gresources.c
+	$(CPROTO) -DFEAT_GUI $< > proto/$@
+	echo "/* vim: set ft=c : */" >> proto/$@
 
 notags:
 	-rm -f tags
@@ -1972,12 +1982,19 @@ test_assert \
 	test_searchpos \
 	test_sort \
 	test_undolevels \
+	test_viml \
 	test_alot:
 	cd testdir; rm -f $@.res test.log messages; $(MAKE) -f Makefile $@.res VIMPROG=../$(VIMTARGET) $(GUI_TESTARG) SCRIPTSOURCE=../$(SCRIPTSOURCE)
+	@if test -f testdir/test.log; then \
+		cat testdir/test.log; \
+	fi
 	cat testdir/messages
 
 newtests:
 	cd testdir; rm -f $@.res test.log messages; $(MAKE) -f Makefile newtests VIMPROG=../$(VIMTARGET) $(GUI_TESTARG) SCRIPTSOURCE=../$(SCRIPTSOURCE)
+	@if test -f testdir/test.log; then \
+		cat testdir/test.log; \
+	fi
 	cat testdir/messages
 
 testclean:
@@ -2441,7 +2458,7 @@ uninstall_runtime:
 # We support common typing mistakes for Juergen! :-)
 clean celan: testclean
 	-rm -f *.o objects/* core $(VIMTARGET).core $(VIMTARGET) vim xxd/*.o
-	-rm -f $(TOOLS) auto/osdef.h auto/pathdef.c auto/if_perl.c
+	-rm -f $(TOOLS) auto/osdef.h auto/pathdef.c auto/if_perl.c auto/gui_gtk_gresources.c auto/gui_gtk_gresources.h
 	-rm -f conftest* *~ auto/link.sed
 	-rm -f $(UNITTEST_TARGETS)
 	-rm -f runtime pixmaps
@@ -2457,7 +2474,7 @@ SHADOWDIR = shadow
 
 shadow:	runtime pixmaps
 	mkdir $(SHADOWDIR)
-	cd $(SHADOWDIR); ln -s ../*.[ch] ../*.in ../*.sh ../*.xs ../*.xbm ../toolcheck ../proto ../vimtutor ../gvimtutor ../mkinstalldirs .
+	cd $(SHADOWDIR); ln -s ../*.[ch] ../*.in ../*.sh ../*.xs ../*.xbm ../gui_gtk_gresources.xml ../toolcheck ../proto ../vimtutor ../gvimtutor ../mkinstalldirs .
 	mkdir $(SHADOWDIR)/auto
 	cd $(SHADOWDIR)/auto; ln -s ../../auto/configure .
 	mkdir $(SHADOWDIR)/po
@@ -2476,7 +2493,7 @@ shadow:	runtime pixmaps
 	fi
 	mkdir $(SHADOWDIR)/testdir
 	cd $(SHADOWDIR)/testdir; ln -s ../../testdir/Makefile \
-				 ../../testdir/vimrc.unix \
+				 ../../testdir/Make_all.mak \
 				 ../../testdir/*.in \
 				 ../../testdir/*.vim \
 				 ../../testdir/python* \
@@ -2578,6 +2595,11 @@ auto/pathdef.c: Makefile auto/config.mk
 	-@echo '";' >> $@
 	-@sh $(srcdir)/pathdef.sh
 
+auto/gui_gtk_gresources.c: gui_gtk_gresources.xml
+	$(GLIB_COMPILE_RESOURCES) --target=$@ --sourcedir=../pixmaps --generate --c-name=gui_gtk --manual-register $<
+auto/gui_gtk_gresources.h: gui_gtk_gresources.xml
+	$(GLIB_COMPILE_RESOURCES) --target=$@ --sourcedir=../pixmaps --generate --c-name=gui_gtk --manual-register $<
+
 # All the object files are put in the "objects" directory.  Since not all make
 # commands understand putting object files in another directory, it must be
 # specified for each file separately.
@@ -2662,6 +2684,9 @@ objects/gui_gtk.o: gui_gtk.c
 
 objects/gui_gtk_f.o: gui_gtk_f.c
 	$(CCC) -o $@ gui_gtk_f.c
+
+objects/gui_gtk_gresources.o: auto/gui_gtk_gresources.c
+	$(CCC) $(PERL_CFLAGS) -o $@ auto/gui_gtk_gresources.c
 
 objects/gui_gtk_x11.o: gui_gtk_x11.c
 	$(CCC) -o $@ gui_gtk_x11.c
@@ -3145,6 +3170,16 @@ objects/gui_gtk_f.o: gui_gtk_f.c vim.h auto/config.h feature.h os_unix.h \
  auto/osdef.h ascii.h keymap.h term.h macros.h option.h structs.h \
  regexp.h gui.h gui_beval.h proto/gui_beval.pro ex_cmds.h proto.h \
  globals.h farsi.h arabic.h gui_gtk_f.h
+objects/gui_gtk_gresources.o: auto/gui_gtk_gresources.c gui_gtk_gresources.xml \
+ ../pixmaps/stock_vim_build_tags.png ../pixmaps/stock_vim_find_help.png \
+ ../pixmaps/stock_vim_save_all.png ../pixmaps/stock_vim_session_load.png \
+ ../pixmaps/stock_vim_session_new.png ../pixmaps/stock_vim_session_save.png \
+ ../pixmaps/stock_vim_shell.png ../pixmaps/stock_vim_window_maximize.png \
+ ../pixmaps/stock_vim_window_maximize_width.png \
+ ../pixmaps/stock_vim_window_minimize.png \
+ ../pixmaps/stock_vim_window_minimize_width.png \
+ ../pixmaps/stock_vim_window_split.png \
+ ../pixmaps/stock_vim_window_split_vertical.png
 objects/gui_motif.o: gui_motif.c vim.h auto/config.h feature.h os_unix.h \
  auto/osdef.h ascii.h keymap.h term.h macros.h option.h structs.h \
  regexp.h gui.h gui_beval.h proto/gui_beval.pro ex_cmds.h proto.h \
@@ -3197,7 +3232,7 @@ objects/gui_gtk_x11.o: gui_gtk_x11.c vim.h auto/config.h feature.h os_unix.h \
  auto/osdef.h ascii.h keymap.h term.h macros.h option.h structs.h \
  regexp.h gui.h gui_beval.h proto/gui_beval.pro ex_cmds.h proto.h \
  globals.h farsi.h arabic.h gui_gtk_f.h ../runtime/vim32x32.xpm \
- ../runtime/vim16x16.xpm ../runtime/vim48x48.xpm
+ ../runtime/vim16x16.xpm ../runtime/vim48x48.xpm $(GRESOURCE_HDR)
 objects/gui_x11.o: gui_x11.c vim.h auto/config.h feature.h os_unix.h auto/osdef.h \
  ascii.h keymap.h term.h macros.h option.h structs.h regexp.h gui.h \
  gui_beval.h proto/gui_beval.pro ex_cmds.h proto.h globals.h farsi.h \
