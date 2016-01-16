@@ -1,4 +1,4 @@
-*eval.txt*	For Vim version 7.4.  Last change: 2016 Jan 09
+*eval.txt*	For Vim version 7.4.  Last change: 2016 Jan 15
 
 
 		  VIM REFERENCE MANUAL	  by Bram Moolenaar
@@ -1752,6 +1752,7 @@ argv( {nr})			String	{nr} entry of the argument list
 argv( )				List	the argument list
 assert_equal( {exp}, {act} [, {msg}]) none  assert {exp} equals {act}
 assert_exception({error} [, {msg}])   none  assert {error} is in v:exception
+assert_fails( {cmd} [, {error}])      none  assert {cmd} fails
 assert_false( {actual} [, {msg}])     none  assert {actual} is false
 assert_true( {actual} [, {msg}])      none  assert {actual} is true
 asin( {expr})			Float	arc sine of {expr}
@@ -2206,6 +2207,11 @@ assert_exception({error} [, {msg}])			*assert_exception()*
 			catch
 			  call assert_exception('E492:')
 			endtry
+
+assert_fails({cmd} [, {error}])					*assert_fails()*
+		Run {cmd} and add an error message to |v:errors| if it does
+		NOT produce an error.
+		When {error} is given it must match |v:errmsg|.
 
 assert_false({actual} [, {msg}])				*assert_false()*
 		When {actual} is not false an error message is added to
@@ -3491,7 +3497,7 @@ getcmdwintype()						*getcmdwintype()*
 							*getcurpos()*
 getcurpos()	Get the position of the cursor.  This is like getpos('.'), but
 		includes an extra item in the list:
-		    [bufnum, lnum, col, off, curswant]
+		    [bufnum, lnum, col, off, curswant] ~
 		The "curswant" number is the preferred column when moving the
 		cursor vertically.
 		This can be used to save and restore the cursor position: >
