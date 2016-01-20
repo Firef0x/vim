@@ -657,6 +657,9 @@ static void f_nextnonblank __ARGS((typval_T *argvars, typval_T *rettv));
 static void f_nr2char __ARGS((typval_T *argvars, typval_T *rettv));
 static void f_or __ARGS((typval_T *argvars, typval_T *rettv));
 static void f_pathshorten __ARGS((typval_T *argvars, typval_T *rettv));
+#ifdef FEAT_PERL
+static void f_perleval __ARGS((typval_T *argvars, typval_T *rettv));
+#endif
 #ifdef FEAT_FLOAT
 static void f_pow __ARGS((typval_T *argvars, typval_T *rettv));
 #endif
@@ -806,6 +809,9 @@ static typval_T *alloc_tv __ARGS((void));
 static typval_T *alloc_string_tv __ARGS((char_u *string));
 static void init_tv __ARGS((typval_T *varp));
 static long get_tv_number __ARGS((typval_T *varp));
+#ifdef FEAT_FLOAT
+static float_T get_tv_float(typval_T *varp);
+#endif
 static linenr_T get_tv_lnum __ARGS((typval_T *argvars));
 static linenr_T get_tv_lnum_buf __ARGS((typval_T *argvars, buf_T *buf));
 static char_u *get_tv_string __ARGS((typval_T *varp));
@@ -858,6 +864,7 @@ static int can_free_funccal __ARGS((funccall_T *fc, int copyID)) ;
 static void free_funccal __ARGS((funccall_T *fc, int free_val));
 static void add_nr_var __ARGS((dict_T *dp, dictitem_T *v, char *name, varnumber_T nr));
 static win_T *find_win_by_nr __ARGS((typval_T *vp, tabpage_T *tp));
+static win_T *find_tabwin __ARGS((typval_T *wvp, typval_T *tvp));
 static void getwinvar __ARGS((typval_T *argvars, typval_T *rettv, int off));
 static int searchpair_cmn __ARGS((typval_T *argvars, pos_T *match_pos));
 static int search_cmn __ARGS((typval_T *argvars, pos_T *match_pos, int *flagsp));
@@ -3684,7 +3691,7 @@ do_unlet_var(lp, name_end, forceit)
     {
 	listitem_T    *li;
 	listitem_T    *ll_li = lp->ll_li;
-	int           ll_n1 = lp->ll_n1;
+	int	      ll_n1 = lp->ll_n1;
 
 	while (ll_li != NULL && (lp->ll_empty2 || lp->ll_n2 >= ll_n1))
 	{
@@ -8180,7 +8187,7 @@ static struct fst
     {"getcmdtype",	0, 0, f_getcmdtype},
     {"getcmdwintype",	0, 0, f_getcmdwintype},
     {"getcurpos",	0, 0, f_getcurpos},
-    {"getcwd",		0, 0, f_getcwd},
+    {"getcwd",		0, 2, f_getcwd},
     {"getfontname",	0, 1, f_getfontname},
     {"getfperm",	1, 1, f_getfperm},
     {"getfsize",	1, 1, f_getfsize},
@@ -8204,7 +8211,7 @@ static struct fst
     {"globpath",	2, 5, f_globpath},
     {"has",		1, 1, f_has},
     {"has_key",		2, 2, f_has_key},
-    {"haslocaldir",	0, 0, f_haslocaldir},
+    {"haslocaldir",	0, 2, f_haslocaldir},
     {"hasmapto",	1, 3, f_hasmapto},
     {"highlightID",	1, 1, f_hlID},		/* obsolete */
     {"highlight_exists",1, 1, f_hlexists},	/* obsolete */
@@ -8270,6 +8277,9 @@ static struct fst
     {"nr2char",		1, 2, f_nr2char},
     {"or",		2, 2, f_or},
     {"pathshorten",	1, 1, f_pathshorten},
+#ifdef FEAT_PERL
+    {"perleval",	1, 1, f_perleval},
+#endif
 #ifdef FEAT_FLOAT
     {"pow",		2, 2, f_pow},
 #endif
@@ -9121,30 +9131,11 @@ f_arglistid(argvars, rettv)
     typval_T	*rettv;
 {
     win_T	*wp;
-    tabpage_T	*tp = NULL;
-    long	n;
 
     rettv->vval.v_number = -1;
-    if (argvars[0].v_type != VAR_UNKNOWN)
-    {
-	if (argvars[1].v_type != VAR_UNKNOWN)
-	{
-	    n = get_tv_number(&argvars[1]);
-	    if (n >= 0)
-		tp = find_tabpage(n);
-	}
-	else
-	    tp = curtab;
-
-	if (tp != NULL)
-	{
-	    wp = find_win_by_nr(&argvars[0], tp);
-	    if (wp != NULL)
-		rettv->vval.v_number = wp->w_alist->id;
-	}
-    }
-    else
-	rettv->vval.v_number = curwin->w_alist->id;
+    wp = find_tabwin(&argvars[0], &argvars[1]);
+    if (wp != NULL)
+	rettv->vval.v_number = wp->w_alist->id;
 }
 
 /*
@@ -9290,7 +9281,8 @@ f_assert_exception(argvars, rettv)
 	assert_error(&ga);
 	ga_clear(&ga);
     }
-    else if (strstr((char *)vimvars[VV_EXCEPTION].vv_str, error) == NULL)
+    else if (error != NULL
+	    && strstr((char *)vimvars[VV_EXCEPTION].vv_str, error) == NULL)
     {
 	prepare_assert_error(&ga);
 	fill_assert_error(&ga, &argvars[1], NULL, &argvars[0],
@@ -12055,25 +12047,36 @@ f_getcmdwintype(argvars, rettv)
  */
     static void
 f_getcwd(argvars, rettv)
-    typval_T	*argvars UNUSED;
+    typval_T	*argvars;
     typval_T	*rettv;
 {
+    win_T	*wp = NULL;
     char_u	*cwd;
 
     rettv->v_type = VAR_STRING;
     rettv->vval.v_string = NULL;
-    cwd = alloc(MAXPATHL);
-    if (cwd != NULL)
+
+    wp = find_tabwin(&argvars[0], &argvars[1]);
+    if (wp != NULL)
     {
-	if (mch_dirname(cwd, MAXPATHL) != FAIL)
+	if (wp->w_localdir != NULL)
+	    rettv->vval.v_string = vim_strsave(wp->w_localdir);
+	else if(globaldir != NULL)
+	    rettv->vval.v_string = vim_strsave(globaldir);
+	else
 	{
-	    rettv->vval.v_string = vim_strsave(cwd);
-#ifdef BACKSLASH_IN_FILENAME
-	    if (rettv->vval.v_string != NULL)
-		slash_adjust(rettv->vval.v_string);
-#endif
+	    cwd = alloc(MAXPATHL);
+	    if (cwd != NULL)
+	    {
+		if (mch_dirname(cwd, MAXPATHL) != FAIL)
+		    rettv->vval.v_string = vim_strsave(cwd);
+		vim_free(cwd);
+	    }
 	}
-	vim_free(cwd);
+#ifdef BACKSLASH_IN_FILENAME
+	if (rettv->vval.v_string != NULL)
+	    slash_adjust(rettv->vval.v_string);
+#endif
     }
 }
 
@@ -12700,6 +12703,38 @@ find_win_by_nr(vp, tp)
 	return curwin;
     return NULL;
 #endif
+}
+
+/*
+ * Find window specified by "wvp" in tabpage "tvp".
+ */
+    static win_T *
+find_tabwin(wvp, tvp)
+    typval_T	*wvp;	/* VAR_UNKNOWN for current window */
+    typval_T	*tvp;	/* VAR_UNKNOWN for current tab page */
+{
+    win_T	*wp = NULL;
+    tabpage_T	*tp = NULL;
+    long	n;
+
+    if (wvp->v_type != VAR_UNKNOWN)
+    {
+	if (tvp->v_type != VAR_UNKNOWN)
+	{
+	    n = get_tv_number(tvp);
+	    if (n >= 0)
+		tp = find_tabpage(n);
+	}
+	else
+	    tp = curtab;
+
+	if (tp != NULL)
+	    wp = find_win_by_nr(wvp, tp);
+    }
+    else
+	wp = curwin;
+
+    return wp;
 }
 
 /*
@@ -13537,10 +13572,13 @@ f_has_key(argvars, rettv)
  */
     static void
 f_haslocaldir(argvars, rettv)
-    typval_T	*argvars UNUSED;
+    typval_T	*argvars;
     typval_T	*rettv;
 {
-    rettv->vval.v_number = (curwin->w_localdir != NULL);
+    win_T	*wp = NULL;
+
+    wp = find_tabwin(&argvars[0], &argvars[1]);
+    rettv->vval.v_number = (wp != NULL && wp->w_localdir != NULL);
 }
 
 /*
@@ -15479,6 +15517,23 @@ f_pathshorten(argvars, rettv)
 	    shorten_dir(p);
     }
 }
+
+#ifdef FEAT_PERL
+/*
+ * "perleval()" function
+ */
+    static void
+f_perleval(argvars, rettv)
+    typval_T *argvars;
+    typval_T *rettv;
+{
+    char_u	*str;
+    char_u	buf[NUMBUFLEN];
+
+    str = get_tv_string_buf(&argvars[0], buf);
+    do_perleval(str, rettv);
+}
+#endif
 
 #ifdef FEAT_FLOAT
 /*
@@ -18091,6 +18146,9 @@ typedef struct
 static int	item_compare_ic;
 static int	item_compare_numeric;
 static int	item_compare_numbers;
+#ifdef FEAT_FLOAT
+static int	item_compare_float;
+#endif
 static char_u	*item_compare_func;
 static dict_T	*item_compare_selfdict;
 static int	item_compare_func_err;
@@ -18129,6 +18187,16 @@ item_compare(s1, s2)
 
 	return v1 == v2 ? 0 : v1 > v2 ? 1 : -1;
     }
+
+#ifdef FEAT_FLOAT
+    if (item_compare_float)
+    {
+	float_T	v1 = get_tv_float(tv1);
+	float_T	v2 = get_tv_float(tv2);
+
+	return v1 == v2 ? 0 : v1 > v2 ? 1 : -1;
+    }
+#endif
 
     /* tv2string() puts quotes around a string and allocates memory.  Don't do
      * that for string variables. Use a single quote when comparing with a
@@ -18264,6 +18332,9 @@ do_sort_uniq(argvars, rettv, sort)
 	item_compare_ic = FALSE;
 	item_compare_numeric = FALSE;
 	item_compare_numbers = FALSE;
+#ifdef FEAT_FLOAT
+	item_compare_float = FALSE;
+#endif
 	item_compare_func = NULL;
 	item_compare_selfdict = NULL;
 	if (argvars[1].v_type != VAR_UNKNOWN)
@@ -18294,6 +18365,13 @@ do_sort_uniq(argvars, rettv, sort)
 			item_compare_func = NULL;
 			item_compare_numbers = TRUE;
 		    }
+#ifdef FEAT_FLOAT
+		    else if (STRCMP(item_compare_func, "f") == 0)
+		    {
+			item_compare_func = NULL;
+			item_compare_float = TRUE;
+		    }
+#endif
 		    else if (STRCMP(item_compare_func, "i") == 0)
 		    {
 			item_compare_func = NULL;
@@ -21561,6 +21639,40 @@ get_tv_number_chk(varp, denote)
     return n;
 }
 
+#ifdef FEAT_FLOAT
+    static float_T
+get_tv_float(varp)
+    typval_T	*varp;
+{
+    switch (varp->v_type)
+    {
+	case VAR_NUMBER:
+	    return (float_T)(varp->vval.v_number);
+#ifdef FEAT_FLOAT
+	case VAR_FLOAT:
+	    return varp->vval.v_float;
+	    break;
+#endif
+	case VAR_FUNC:
+	    EMSG(_("E891: Using a Funcref as a Float"));
+	    break;
+	case VAR_STRING:
+	    EMSG(_("E892: Using a String as a Float"));
+	    break;
+	case VAR_LIST:
+	    EMSG(_("E893: Using a List as a Float"));
+	    break;
+	case VAR_DICT:
+	    EMSG(_("E894: Using a Dictionary as a Float"));
+	    break;
+	default:
+	    EMSG2(_(e_intern2), "get_tv_float()");
+	    break;
+    }
+    return 0;
+}
+#endif
+
 /*
  * Get the lnum from the first argument.
  * Also accepts ".", "$", etc., but that only works for the current buffer.
@@ -21828,15 +21940,15 @@ get_funccal()
     funccal = current_funccal;
     if (debug_backtrace_level > 0)
     {
-        for (i = 0; i < debug_backtrace_level; i++)
-        {
-            temp_funccal = funccal->caller;
-            if (temp_funccal)
-                funccal = temp_funccal;
+	for (i = 0; i < debug_backtrace_level; i++)
+	{
+	    temp_funccal = funccal->caller;
+	    if (temp_funccal)
+		funccal = temp_funccal;
 	    else
-                /* backtrace level overflow. reset to max */
-                debug_backtrace_level = i;
-        }
+		/* backtrace level overflow. reset to max */
+		debug_backtrace_level = i;
+	}
     }
     return funccal;
 }
@@ -23356,8 +23468,8 @@ ret_free:
  * Also handles a Funcref in a List or Dictionary.
  * Returns the function name in allocated memory, or NULL for failure.
  * flags:
- * TFN_INT:         internal function name OK
- * TFN_QUIET:       be quiet
+ * TFN_INT:	    internal function name OK
+ * TFN_QUIET:	    be quiet
  * TFN_NO_AUTOLOAD: do not use script autoloading
  * Advances "pp" to just after the function name (if no error).
  */
@@ -23576,8 +23688,10 @@ theend:
 eval_fname_script(p)
     char_u	*p;
 {
-    if (p[0] == '<' && (STRNICMP(p + 1, "SID>", 4) == 0
-					  || STRNICMP(p + 1, "SNR>", 4) == 0))
+    /* Use MB_STRICMP() because in Turkish comparing the "I" may not work with
+     * the standard library function. */
+    if (p[0] == '<' && (MB_STRNICMP(p + 1, "SID>", 4) == 0
+				       || MB_STRNICMP(p + 1, "SNR>", 4) == 0))
 	return 5;
     if (p[0] == 's' && p[1] == ':')
 	return 2;
@@ -25003,6 +25117,7 @@ read_viminfo_varlist(virp, writing)
     char_u	*tab;
     int		type = VAR_NUMBER;
     typval_T	tv;
+    funccall_T  *save_funccal;
 
     if (!writing && (find_viminfo_parameter('!') != NULL))
     {
@@ -25049,7 +25164,11 @@ read_viminfo_varlist(virp, writing)
 		    }
 		}
 
+		/* when in a function use global variables */
+		save_funccal = current_funccal;
+		current_funccal = NULL;
 		set_var(virp->vir_line + 1, &tv, FALSE);
+		current_funccal = save_funccal;
 
 		if (tv.v_type == VAR_STRING)
 		    vim_free(tv.vval.v_string);
