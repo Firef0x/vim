@@ -919,6 +919,8 @@ eval_init(void)
 	    /* add to compat scope dict */
 	    hash_add(&compat_hashtab, p->vv_di.di_key);
     }
+    vimvars[VV_VERSION].vv_nr = VIM_VERSION_100;
+
     set_vim_var_nr(VV_SEARCHFORWARD, 1L);
     set_vim_var_nr(VV_HLSEARCH, 1L);
     set_vim_var_dict(VV_COMPLETED_ITEM, dict_alloc());
@@ -5999,7 +6001,7 @@ list_free(
  * It is not initialized, don't forget to set v_lock.
  */
     listitem_T *
-listitem_alloc()
+listitem_alloc(void)
 {
     return (listitem_T *)alloc(sizeof(listitem_T));
 }
@@ -10900,13 +10902,11 @@ f_filewritable(typval_T *argvars, typval_T *rettv)
     rettv->vval.v_number = filewritable(get_tv_string(&argvars[0]));
 }
 
-static void findfilendir(typval_T *argvars, typval_T *rettv, int find_what);
-
     static void
-findfilendir(argvars, rettv, find_what)
-    typval_T	*argvars UNUSED;
-    typval_T	*rettv;
-    int		find_what UNUSED;
+findfilendir(
+    typval_T	*argvars UNUSED,
+    typval_T	*rettv,
+    int		find_what UNUSED)
 {
 #ifdef FEAT_SEARCHPATH
     char_u	*fname;
@@ -12855,9 +12855,7 @@ f_has(typval_T *argvars, typval_T *rettv)
 	"emacs_tags",
 #endif
 	"eval",	    /* always present, of course! */
-#ifdef FEAT_EX_EXTRA
-	"ex_extra",
-#endif
+	"ex_extra", /* graduated feature */
 #ifdef FEAT_SEARCH_EXTRA
 	"extra_search",
 #endif
@@ -13684,16 +13682,12 @@ get_user_input(
 
 	if (defstr != NULL)
 	{
-# ifdef FEAT_EX_EXTRA
 	    int save_ex_normal_busy = ex_normal_busy;
 	    ex_normal_busy = 0;
-# endif
 	    rettv->vval.v_string =
 		getcmdline_prompt(inputsecret_flag ? NUL : '@', p, echo_attr,
 				  xp_type, xp_arg);
-# ifdef FEAT_EX_EXTRA
 	    ex_normal_busy = save_ex_normal_busy;
-# endif
 	}
 	if (inputdialog && rettv->vval.v_string == NULL
 		&& argvars[1].v_type != VAR_UNKNOWN
@@ -15217,13 +15211,11 @@ f_prevnonblank(typval_T *argvars, typval_T *rettv)
     rettv->vval.v_number = lnum;
 }
 
-#ifdef HAVE_STDARG_H
 /* This dummy va_list is here because:
  * - passing a NULL pointer doesn't work when va_list isn't a pointer
  * - locally in the function results in a "used before set" warning
  * - using va_start() to initialize it gives "function with fixed args" error */
 static va_list	ap;
-#endif
 
 /*
  * "printf()" function
@@ -15231,32 +15223,29 @@ static va_list	ap;
     static void
 f_printf(typval_T *argvars, typval_T *rettv)
 {
+    char_u	buf[NUMBUFLEN];
+    int		len;
+    char_u	*s;
+    int		saved_did_emsg = did_emsg;
+    char	*fmt;
+
     rettv->v_type = VAR_STRING;
     rettv->vval.v_string = NULL;
-#ifdef HAVE_STDARG_H	    /* only very old compilers can't do this */
-    {
-	char_u	buf[NUMBUFLEN];
-	int	len;
-	char_u	*s;
-	int	saved_did_emsg = did_emsg;
-	char	*fmt;
 
-	/* Get the required length, allocate the buffer and do it for real. */
-	did_emsg = FALSE;
-	fmt = (char *)get_tv_string_buf(&argvars[0], buf);
-	len = vim_vsnprintf(NULL, 0, fmt, ap, argvars + 1);
-	if (!did_emsg)
+    /* Get the required length, allocate the buffer and do it for real. */
+    did_emsg = FALSE;
+    fmt = (char *)get_tv_string_buf(&argvars[0], buf);
+    len = vim_vsnprintf(NULL, 0, fmt, ap, argvars + 1);
+    if (!did_emsg)
+    {
+	s = alloc(len + 1);
+	if (s != NULL)
 	{
-	    s = alloc(len + 1);
-	    if (s != NULL)
-	    {
-		rettv->vval.v_string = s;
-		(void)vim_vsnprintf((char *)s, len + 1, fmt, ap, argvars + 1);
-	    }
+	    rettv->vval.v_string = s;
+	    (void)vim_vsnprintf((char *)s, len + 1, fmt, ap, argvars + 1);
 	}
-	did_emsg |= saved_did_emsg;
     }
-#endif
+    did_emsg |= saved_did_emsg;
 }
 
 /*
@@ -16894,8 +16883,6 @@ send_common(typval_T *argvars, char_u *text, char *fun)
      * not reading the response. */
     channel_set_req_callback(ch_idx,
 	    callback != NULL && *callback == NUL ? NULL : callback);
-    if (callback == NULL)
-	channel_will_block(ch_idx);
 
     if (channel_send(ch_idx, text, fun) == OK && callback == NULL)
 	return ch_idx;
@@ -16912,6 +16899,7 @@ f_sendexpr(typval_T *argvars, typval_T *rettv)
     char_u	*resp;
     typval_T	nrtv;
     typval_T	listtv;
+    typval_T	typetv;
     int		ch_idx;
 
     /* return an empty string by default */
@@ -16937,10 +16925,11 @@ f_sendexpr(typval_T *argvars, typval_T *rettv)
     {
 	/* TODO: read until the whole JSON message is received */
 	/* TODO: only use the message with the right message ID */
+	/* TODO: check sequence number */
 	resp = channel_read_block(ch_idx);
 	if (resp != NULL)
 	{
-	    channel_decode_json(resp, rettv);
+	    channel_decode_json(resp, &typetv, rettv);
 	    vim_free(resp);
 	}
     }
@@ -20627,11 +20616,8 @@ set_vim_var_string(
     char_u	*val,
     int		len)	    /* length of "val" to use or -1 (whole string) */
 {
-    /* Need to do this (at least) once, since we can't initialize a union.
-     * Will always be invoked when "v:progname" is set. */
-    vimvars[VV_VERSION].vv_nr = VIM_VERSION_100;
-
-    vim_free(vimvars[idx].vv_str);
+    clear_tv(&vimvars[idx].vv_di.di_tv);
+    vimvars[idx].vv_type = VAR_STRING;
     if (val == NULL)
 	vimvars[idx].vv_str = NULL;
     else if (len == -1)
@@ -20646,7 +20632,8 @@ set_vim_var_string(
     void
 set_vim_var_list(int idx, list_T *val)
 {
-    list_unref(vimvars[idx].vv_list);
+    clear_tv(&vimvars[idx].vv_di.di_tv);
+    vimvars[idx].vv_type = VAR_LIST;
     vimvars[idx].vv_list = val;
     if (val != NULL)
 	++val->lv_refcount;
@@ -20661,7 +20648,8 @@ set_vim_var_dict(int idx, dict_T *val)
     int		todo;
     hashitem_T	*hi;
 
-    dict_unref(vimvars[idx].vv_dict);
+    clear_tv(&vimvars[idx].vv_di.di_tv);
+    vimvars[idx].vv_type = VAR_DICT;
     vimvars[idx].vv_dict = val;
     if (val != NULL)
     {
@@ -21951,6 +21939,7 @@ item_copy(
 #endif
 	case VAR_STRING:
 	case VAR_FUNC:
+	case VAR_SPECIAL:
 	    copy_tv(from, to);
 	    break;
 	case VAR_LIST:
