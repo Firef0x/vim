@@ -3065,6 +3065,7 @@ tv_op(typval_T *tv1, typval_T *tv2, char_u *op)
 	    case VAR_DICT:
 	    case VAR_FUNC:
 	    case VAR_SPECIAL:
+	    case VAR_UNKNOWN:
 		break;
 
 	    case VAR_LIST:
@@ -3837,6 +3838,14 @@ item_lock(typval_T *tv, int deep, int lock)
 
     switch (tv->v_type)
     {
+	case VAR_UNKNOWN:
+	case VAR_NUMBER:
+	case VAR_STRING:
+	case VAR_FUNC:
+	case VAR_FLOAT:
+	case VAR_SPECIAL:
+	    break;
+
 	case VAR_LIST:
 	    if ((l = tv->vval.v_list) != NULL)
 	    {
@@ -5317,23 +5326,32 @@ eval_index(
     char_u	*s;
     char_u	*key = NULL;
 
-    if (rettv->v_type == VAR_FUNC)
+    switch (rettv->v_type)
     {
-	if (verbose)
-	    EMSG(_("E695: Cannot index a Funcref"));
-	return FAIL;
-    }
+	case VAR_FUNC:
+	    if (verbose)
+		EMSG(_("E695: Cannot index a Funcref"));
+	    return FAIL;
+	case VAR_FLOAT:
 #ifdef FEAT_FLOAT
-    else if (rettv->v_type == VAR_FLOAT)
-    {
-	if (verbose)
-	    EMSG(_(e_float_as_string));
-	return FAIL;
-    }
+	    if (verbose)
+		EMSG(_(e_float_as_string));
+	    return FAIL;
 #endif
-    else if (rettv->v_type == VAR_SPECIAL)
-    {
-	return FAIL;
+	case VAR_SPECIAL:
+	    if (verbose)
+		EMSG(_("E909: Cannot index a special variable"));
+	    return FAIL;
+	case VAR_UNKNOWN:
+	    if (evaluate)
+		return FAIL;
+	    /* FALLTHROUGH */
+
+	case VAR_STRING:
+	case VAR_NUMBER:
+	case VAR_LIST:
+	case VAR_DICT:
+	    break;
     }
 
     init_tv(&var1);
@@ -5428,6 +5446,12 @@ eval_index(
 
 	switch (rettv->v_type)
 	{
+	    case VAR_SPECIAL:
+	    case VAR_FUNC:
+	    case VAR_FLOAT:
+	    case VAR_UNKNOWN:
+		break; /* not evaluating, skipping over subscript */
+
 	    case VAR_NUMBER:
 	    case VAR_STRING:
 		s = get_tv_string(rettv);
@@ -6143,6 +6167,9 @@ tv_equal(
 
     switch (tv1->v_type)
     {
+	case VAR_UNKNOWN:
+	    break;
+
 	case VAR_LIST:
 	    ++recursive_cnt;
 	    r = list_equal(tv1->vval.v_list, tv2->vval.v_list, ic, TRUE);
@@ -6177,8 +6204,9 @@ tv_equal(
 	    return tv1->vval.v_number == tv2->vval.v_number;
     }
 
-    EMSG2(_(e_intern2), "tv_equal()");
-    return TRUE;
+    /* VAR_UNKNOWN can be the result of a invalid expression, let's say it
+     * does not equal anything, not even itself. */
+    return FALSE;
 }
 
 /*
@@ -6855,6 +6883,10 @@ garbage_collect(void)
     abort = abort || set_ref_in_python3(copyID);
 #endif
 
+#ifdef FEAT_CHANNEL
+    abort = abort || set_ref_in_channel(copyID);
+#endif
+
     if (!abort)
     {
 	/*
@@ -7043,59 +7075,56 @@ set_ref_in_item(
     list_T	*ll;
     int		abort = FALSE;
 
-    switch (tv->v_type)
+    if (tv->v_type == VAR_DICT)
     {
-	case VAR_DICT:
-	    dd = tv->vval.v_dict;
-	    if (dd != NULL && dd->dv_copyID != copyID)
+	dd = tv->vval.v_dict;
+	if (dd != NULL && dd->dv_copyID != copyID)
+	{
+	    /* Didn't see this dict yet. */
+	    dd->dv_copyID = copyID;
+	    if (ht_stack == NULL)
 	    {
-		/* Didn't see this dict yet. */
-		dd->dv_copyID = copyID;
-		if (ht_stack == NULL)
-		{
-		    abort = set_ref_in_ht(&dd->dv_hashtab, copyID, list_stack);
-		}
+		abort = set_ref_in_ht(&dd->dv_hashtab, copyID, list_stack);
+	    }
+	    else
+	    {
+		ht_stack_T *newitem = (ht_stack_T*)malloc(sizeof(ht_stack_T));
+		if (newitem == NULL)
+		    abort = TRUE;
 		else
 		{
-		    ht_stack_T *newitem = (ht_stack_T*)malloc(
-							  sizeof(ht_stack_T));
-		    if (newitem == NULL)
-			abort = TRUE;
-		    else
-		    {
-			newitem->ht = &dd->dv_hashtab;
-			newitem->prev = *ht_stack;
-			*ht_stack = newitem;
-		    }
+		    newitem->ht = &dd->dv_hashtab;
+		    newitem->prev = *ht_stack;
+		    *ht_stack = newitem;
 		}
 	    }
-	    break;
-
-	case VAR_LIST:
-	    ll = tv->vval.v_list;
-	    if (ll != NULL && ll->lv_copyID != copyID)
+	}
+    }
+    else if (tv->v_type == VAR_LIST)
+    {
+	ll = tv->vval.v_list;
+	if (ll != NULL && ll->lv_copyID != copyID)
+	{
+	    /* Didn't see this list yet. */
+	    ll->lv_copyID = copyID;
+	    if (list_stack == NULL)
 	    {
-		/* Didn't see this list yet. */
-		ll->lv_copyID = copyID;
-		if (list_stack == NULL)
-		{
-		    abort = set_ref_in_list(ll, copyID, ht_stack);
-		}
-		else
-		{
-		    list_stack_T *newitem = (list_stack_T*)malloc(
+		abort = set_ref_in_list(ll, copyID, ht_stack);
+	    }
+	    else
+	    {
+		list_stack_T *newitem = (list_stack_T*)malloc(
 							sizeof(list_stack_T));
-		    if (newitem == NULL)
-			abort = TRUE;
-		    else
-		    {
-			newitem->list = ll;
-			newitem->prev = *list_stack;
-			*list_stack = newitem;
-		    }
+		if (newitem == NULL)
+		    abort = TRUE;
+		else
+		{
+		    newitem->list = ll;
+		    newitem->prev = *list_stack;
+		    *list_stack = newitem;
 		}
 	    }
-	    break;
+	}
     }
     return abort;
 }
@@ -7759,6 +7788,7 @@ echo_string(
 
 	case VAR_STRING:
 	case VAR_NUMBER:
+	case VAR_UNKNOWN:
 	    *tofree = NULL;
 	    r = get_tv_string_buf(tv, numbuf);
 	    break;
@@ -7775,10 +7805,6 @@ echo_string(
 	    *tofree = NULL;
 	    r = (char_u *)get_var_special_name(tv->vval.v_number);
 	    break;
-
-	default:
-	    EMSG2(_(e_intern2), "echo_string()");
-	    *tofree = NULL;
     }
 
     if (--recurse == 0)
@@ -7818,9 +7844,8 @@ tv2string(
 	case VAR_LIST:
 	case VAR_DICT:
 	case VAR_SPECIAL:
+	case VAR_UNKNOWN:
 	    break;
-	default:
-	    EMSG2(_(e_intern2), "tv2string()");
     }
     return echo_string(tv, tofree, numbuf, copyID);
 }
@@ -8001,7 +8026,7 @@ static struct fst
 #endif
 #ifdef FEAT_CHANNEL
     {"ch_close",	1, 1, f_ch_close},
-    {"ch_open",		2, 3, f_ch_open},
+    {"ch_open",		1, 2, f_ch_open},
     {"ch_sendexpr",	2, 3, f_ch_sendexpr},
     {"ch_sendraw",	2, 3, f_ch_sendraw},
 #endif
@@ -9739,21 +9764,23 @@ f_ch_open(typval_T *argvars, typval_T *rettv)
     char_u	*address;
     char_u	*mode;
     char_u	*callback = NULL;
-    char_u	buf1[NUMBUFLEN];
     char_u	*p;
+    char	*rest;
     int		port;
-    int		json_mode = FALSE;
+    int		waittime = 0;
+    int		timeout = 2000;
+    int		json_mode = TRUE;
+    int		ch_idx;
 
     /* default: fail */
     rettv->vval.v_number = -1;
 
     address = get_tv_string(&argvars[0]);
-    mode = get_tv_string_buf(&argvars[1], buf1);
-    if (argvars[2].v_type != VAR_UNKNOWN)
+    if (argvars[1].v_type != VAR_UNKNOWN
+	 && (argvars[1].v_type != VAR_DICT || argvars[1].vval.v_dict == NULL))
     {
-	callback = get_callback(&argvars[2]);
-	if (callback == NULL)
-	    return;
+	EMSG(_(e_invarg));
+	return;
     }
 
     /* parse address */
@@ -9764,30 +9791,52 @@ f_ch_open(typval_T *argvars, typval_T *rettv)
 	return;
     }
     *p++ = NUL;
-    port = atoi((char *)p);
-    if (*address == NUL || port <= 0)
+    port = strtol((char *)p, &rest, 10);
+    if (*address == NUL || port <= 0 || *rest != NUL)
     {
 	p[-1] = ':';
 	EMSG2(_(e_invarg2), address);
 	return;
     }
 
-    /* parse mode */
-    if (STRCMP(mode, "json") == 0)
-	json_mode = TRUE;
-    else if (STRCMP(mode, "raw") != 0)
+    if (argvars[1].v_type == VAR_DICT)
     {
-	EMSG2(_(e_invarg2), mode);
+	/* parse argdict */
+	dict_T	*dict = argvars[1].vval.v_dict;
+
+	if (dict_find(dict, (char_u *)"mode", -1) != NULL)
+	{
+	    mode = get_dict_string(dict, (char_u *)"mode", FALSE);
+	    if (STRCMP(mode, "raw") == 0)
+		json_mode = FALSE;
+	    else if (STRCMP(mode, "json") != 0)
+	    {
+		EMSG2(_(e_invarg2), mode);
+		return;
+	    }
+	}
+	if (dict_find(dict, (char_u *)"waittime", -1) != NULL)
+	    waittime = get_dict_number(dict, (char_u *)"waittime");
+	if (dict_find(dict, (char_u *)"timeout", -1) != NULL)
+	    timeout = get_dict_number(dict, (char_u *)"timeout");
+	if (dict_find(dict, (char_u *)"callback", -1) != NULL)
+	    callback = get_dict_string(dict, (char_u *)"callback", FALSE);
+    }
+    if (waittime < 0 || timeout < 0)
+    {
+	EMSG(_(e_invarg));
 	return;
     }
 
-    rettv->vval.v_number = channel_open((char *)address, port, NULL);
-    if (rettv->vval.v_number >= 0)
+    ch_idx = channel_open((char *)address, port, waittime, NULL);
+    if (ch_idx >= 0)
     {
-	channel_set_json_mode(rettv->vval.v_number, json_mode);
+	channel_set_json_mode(ch_idx, json_mode);
+	channel_set_timeout(ch_idx, timeout);
 	if (callback != NULL && *callback != NUL)
-	    channel_set_callback(rettv->vval.v_number, callback);
+	    channel_set_callback(ch_idx, callback);
     }
+    rettv->vval.v_number = ch_idx;
 }
 
 /*
@@ -9796,7 +9845,7 @@ f_ch_open(typval_T *argvars, typval_T *rettv)
  * Otherwise returns -1.
  */
     static int
-send_common(typval_T *argvars, char_u *text, char *fun)
+send_common(typval_T *argvars, char_u *text, int id, char *fun)
 {
     int		ch_idx;
     char_u	*callback = NULL;
@@ -9811,10 +9860,10 @@ send_common(typval_T *argvars, char_u *text, char *fun)
 	if (callback == NULL)
 	    return -1;
     }
-    /* Set the callback or clear it. An empty callback means no callback and
-     * not reading the response. */
-    channel_set_req_callback(ch_idx,
-	    callback != NULL && *callback == NUL ? NULL : callback);
+    /* Set the callback. An empty callback means no callback and not reading
+     * the response. */
+    if (callback != NULL && *callback != NUL)
+	channel_set_req_callback(ch_idx, callback, id);
 
     if (channel_send(ch_idx, text, fun) == OK && callback == NULL)
 	return ch_idx;
@@ -9841,23 +9890,18 @@ f_ch_sendexpr(typval_T *argvars, typval_T *rettv)
     if (text == NULL)
 	return;
 
-    ch_idx = send_common(argvars, text, "sendexpr");
+    ch_idx = send_common(argvars, text, id, "sendexpr");
+    vim_free(text);
     if (ch_idx >= 0)
     {
 	if (channel_read_json_block(ch_idx, id, &listtv) == OK)
 	{
-	    if (listtv->v_type == VAR_LIST)
-	    {
-		list_T *list = listtv->vval.v_list;
+	    list_T *list = listtv->vval.v_list;
 
-		if (list->lv_len == 2)
-		{
-		    /* Move the item from the list and then change the type to
-		     * avoid the value being freed. */
-		    *rettv = list->lv_last->li_tv;
-		    list->lv_last->li_tv.v_type = VAR_NUMBER;
-		}
-	    }
+	    /* Move the item from the list and then change the type to
+	     * avoid the value being freed. */
+	    *rettv = list->lv_last->li_tv;
+	    list->lv_last->li_tv.v_type = VAR_NUMBER;
 	    clear_tv(listtv);
 	}
     }
@@ -9878,7 +9922,7 @@ f_ch_sendraw(typval_T *argvars, typval_T *rettv)
     rettv->vval.v_string = NULL;
 
     text = get_tv_string_buf(&argvars[1], buf);
-    ch_idx = send_common(argvars, text, "sendraw");
+    ch_idx = send_common(argvars, text, 0, "sendraw");
     if (ch_idx >= 0)
 	rettv->vval.v_string = channel_read_block(ch_idx);
 }
@@ -10505,9 +10549,10 @@ f_empty(typval_T *argvars, typval_T *rettv)
 	    n = argvars[0].vval.v_number != VVAL_TRUE;
 	    break;
 
-	default:
-	    EMSG2(_(e_intern2), "f_empty()");
-	    n = 0;
+	case VAR_UNKNOWN:
+	    EMSG2(_(e_intern2), "f_empty(UNKNOWN)");
+	    n = TRUE;
+	    break;
     }
 
     rettv->vval.v_number = n;
@@ -14243,7 +14288,10 @@ f_len(typval_T *argvars, typval_T *rettv)
 	case VAR_DICT:
 	    rettv->vval.v_number = dict_len(argvars[0].vval.v_dict);
 	    break;
-	default:
+	case VAR_UNKNOWN:
+	case VAR_SPECIAL:
+	case VAR_FLOAT:
+	case VAR_FUNC:
 	    EMSG(_("E701: Invalid type for len()"));
 	    break;
     }
@@ -19601,13 +19649,16 @@ f_type(typval_T *argvars, typval_T *rettv)
 	case VAR_FLOAT:  n = 5; break;
 #endif
 	case VAR_SPECIAL:
-			 if (argvars[0].vval.v_number == VVAL_FALSE
-				 || argvars[0].vval.v_number == VVAL_TRUE)
-			     n = 6;
-			 else
-			     n = 7;
-			 break;
-	default: EMSG2(_(e_intern2), "f_type()"); n = 0; break;
+	     if (argvars[0].vval.v_number == VVAL_FALSE
+		     || argvars[0].vval.v_number == VVAL_TRUE)
+		 n = 6;
+	     else
+		 n = 7;
+	     break;
+	case VAR_UNKNOWN:
+	     EMSG2(_(e_intern2), "f_type(UNKNOWN)");
+	     n = -1;
+	     break;
     }
     rettv->vval.v_number = n;
 }
@@ -20977,9 +21028,6 @@ free_tv(typval_T *varp)
 	    case VAR_UNKNOWN:
 	    case VAR_SPECIAL:
 		break;
-	    default:
-		EMSG2(_(e_intern2), "free_tv()");
-		break;
 	}
 	vim_free(varp);
     }
@@ -21021,8 +21069,6 @@ clear_tv(typval_T *varp)
 #endif
 	    case VAR_UNKNOWN:
 		break;
-	    default:
-		EMSG2(_(e_intern2), "clear_tv()");
 	}
 	varp->v_lock = 0;
     }
@@ -21085,8 +21131,8 @@ get_tv_number_chk(typval_T *varp, int *denote)
 	case VAR_SPECIAL:
 	    return varp->vval.v_number == VVAL_TRUE ? 1 : 0;
 	    break;
-	default:
-	    EMSG2(_(e_intern2), "get_tv_number()");
+	case VAR_UNKNOWN:
+	    EMSG2(_(e_intern2), "get_tv_number(UNKNOWN)");
 	    break;
     }
     if (denote == NULL)		/* useful for values that must be unsigned */
@@ -21107,7 +21153,6 @@ get_tv_float(typval_T *varp)
 #ifdef FEAT_FLOAT
 	case VAR_FLOAT:
 	    return varp->vval.v_float;
-	    break;
 #endif
 	case VAR_FUNC:
 	    EMSG(_("E891: Using a Funcref as a Float"));
@@ -21121,8 +21166,11 @@ get_tv_float(typval_T *varp)
 	case VAR_DICT:
 	    EMSG(_("E894: Using a Dictionary as a Float"));
 	    break;
-	default:
-	    EMSG2(_(e_intern2), "get_tv_float()");
+	case VAR_SPECIAL:
+	    EMSG(_("E907: Using a special value as a Float"));
+	    break;
+	case VAR_UNKNOWN:
+	    EMSG2(_(e_intern2), "get_tv_float(UNKNOWN)");
 	    break;
     }
     return 0;
@@ -21233,9 +21281,8 @@ get_tv_string_buf_chk(typval_T *varp, char_u *buf)
 	case VAR_SPECIAL:
 	    STRCPY(buf, get_var_special_name(varp->vval.v_number));
 	    return buf;
-
-	default:
-	    EMSG2(_(e_intern2), "get_tv_string_buf()");
+	case VAR_UNKNOWN:
+	    EMSG(_("E908: using an invalid value as a String"));
 	    break;
     }
     return NULL;
@@ -21887,8 +21934,8 @@ copy_tv(typval_T *from, typval_T *to)
 		++to->vval.v_dict->dv_refcount;
 	    }
 	    break;
-	default:
-	    EMSG2(_(e_intern2), "copy_tv()");
+	case VAR_UNKNOWN:
+	    EMSG2(_(e_intern2), "copy_tv(UNKNOWN)");
 	    break;
     }
 }
@@ -21960,8 +22007,8 @@ item_copy(
 	    if (to->vval.v_dict == NULL)
 		ret = FAIL;
 	    break;
-	default:
-	    EMSG2(_(e_intern2), "item_copy()");
+	case VAR_UNKNOWN:
+	    EMSG2(_(e_intern2), "item_copy(UNKNOWN)");
 	    ret = FAIL;
     }
     --recurse;
@@ -24509,6 +24556,7 @@ read_viminfo_varlist(vir_T *virp, int writing)
 #endif
 		case 'D': type = VAR_DICT; break;
 		case 'L': type = VAR_LIST; break;
+		case 'X': type = VAR_SPECIAL; break;
 	    }
 
 	    tab = vim_strchr(tab, '\t');
@@ -24594,7 +24642,11 @@ write_viminfo_varlist(FILE *fp)
 #endif
 		    case VAR_DICT:   s = "DIC"; break;
 		    case VAR_LIST:   s = "LIS"; break;
-		    default: continue;
+		    case VAR_SPECIAL: s = "XPL"; break;
+
+		    case VAR_UNKNOWN:
+		    case VAR_FUNC:
+				     continue;
 		}
 		fprintf(fp, "!%s\t%s\t", this_var->di_key, s);
 		p = echo_string(&this_var->di_tv, &tofree, numbuf, 0);
