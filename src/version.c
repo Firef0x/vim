@@ -289,6 +289,11 @@ static char *(features[]) =
 #else
 	"-insert_expand",
 #endif
+#ifdef FEAT_JOB
+	"+job",
+#else
+	"-job",
+#endif
 #ifdef FEAT_JUMPLIST
 	"+jumplist",
 #else
@@ -742,6 +747,24 @@ static char *(features[]) =
 
 static int included_patches[] =
 {   /* Add new patch number below this line */
+/**/
+    1278,
+/**/
+    1277,
+/**/
+    1276,
+/**/
+    1275,
+/**/
+    1274,
+/**/
+    1273,
+/**/
+    1272,
+/**/
+    1271,
+/**/
+    1270,
 /**/
     1269,
 /**/
