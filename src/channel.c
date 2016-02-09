@@ -116,10 +116,12 @@ typedef struct {
 
     void      (*ch_close_cb)(void); /* callback for when channel is closed */
 
+    int	      ch_block_id;	/* ID that channel_read_json_block() is
+				   waiting for */
     char_u    *ch_callback;	/* function to call when a msg is not handled */
     cbq_T     ch_cb_head;	/* dummy node for pre-request callbacks */
 
-    int	      ch_json_mode;	/* TRUE for a json channel */
+    ch_mode_T ch_mode;
     jsonq_T   ch_json_head;	/* dummy node, header for circular queue */
 
     int       ch_timeout;	/* request timeout in msec */
@@ -431,18 +433,16 @@ channel_open(char *hostname, int port_in, int waittime, void (*close_cb)(void))
 	}
     }
 
-    if (waittime >= 0)
+    if (waittime >= 0 && ret < 0)
     {
 	struct timeval	tv;
-	fd_set		rfds, wfds;
+	fd_set		wfds;
 
-	FD_ZERO(&rfds);
 	FD_ZERO(&wfds);
-	FD_SET(sd, &rfds);
 	FD_SET(sd, &wfds);
 	tv.tv_sec = waittime / 1000;
 	tv.tv_usec = (waittime % 1000) * 1000;
-	ret = select((int)sd+1, &rfds, &wfds, NULL, &tv);
+	ret = select((int)sd + 1, NULL, &wfds, NULL, &tv);
 	if (ret < 0)
 	{
 	    SOCK_ERRNO;
@@ -452,15 +452,16 @@ channel_open(char *hostname, int port_in, int waittime, void (*close_cb)(void))
 	    sock_close(sd);
 	    return -1;
 	}
-	if (!FD_ISSET(sd, &rfds) && !FD_ISSET(sd, &wfds))
+	if (!FD_ISSET(sd, &wfds))
 	{
-	    errno = ECONNREFUSED;
-	    CHERROR("Cannot connect to port\n", "");
-	    PERROR(_("E902: Cannot connect to port"));
+	    /* don't give an error, we just timed out. */
 	    sock_close(sd);
 	    return -1;
 	}
+    }
 
+    if (waittime >= 0)
+    {
 #ifdef _WIN32
 	val = 0;
 	ioctlsocket(sd, FIONBIO, &val);
@@ -469,7 +470,8 @@ channel_open(char *hostname, int port_in, int waittime, void (*close_cb)(void))
 #endif
     }
 
-    if (errno == ECONNREFUSED)
+    /* Only retry for netbeans.  TODO: can we use a waittime instead? */
+    if (errno == ECONNREFUSED && close_cb != NULL)
     {
 	sock_close(sd);
 	if ((sd = (sock_T)socket(AF_INET, SOCK_STREAM, 0)) == (sock_T)-1)
@@ -526,12 +528,12 @@ channel_open(char *hostname, int port_in, int waittime, void (*close_cb)(void))
 }
 
 /*
- * Set the json mode of channel "idx" to TRUE or FALSE.
+ * Set the json mode of channel "idx" to "ch_mode".
  */
     void
-channel_set_json_mode(int idx, int json_mode)
+channel_set_json_mode(int idx, ch_mode_T ch_mode)
 {
-    channels[idx].ch_json_mode = json_mode;
+    channels[idx].ch_mode = ch_mode;
 }
 
 /*
@@ -672,7 +674,8 @@ channel_parse_json(int ch_idx)
     js_read_T	reader;
     typval_T	listtv;
     jsonq_T	*item;
-    jsonq_T	*head = &channels[ch_idx].ch_json_head;
+    channel_T	*channel = &channels[ch_idx];
+    jsonq_T	*head = &channel->ch_json_head;
     int		ret;
 
     if (channel_peek(ch_idx) == NULL)
@@ -685,7 +688,8 @@ channel_parse_json(int ch_idx)
     reader.js_fill = NULL;
     /* reader.js_fill = channel_fill; */
     reader.js_cookie = &ch_idx;
-    ret = json_decode(&reader, &listtv);
+    ret = json_decode(&reader, &listtv,
+				   channel->ch_mode == MODE_JS ? JSON_JS : 0);
     if (ret == OK)
     {
 	/* Only accept the response when it is a list with at least two
@@ -763,15 +767,17 @@ remove_json_node(jsonq_T *node)
 /*
  * Get a message from the JSON queue for channel "ch_idx".
  * When "id" is positive it must match the first number in the list.
- * When "id" is zero or negative jut get the first message.
+ * When "id" is zero or negative jut get the first message.  But not the one
+ * with id ch_block_id.
  * Return OK when found and return the value in "rettv".
  * Return FAIL otherwise.
  */
     static int
 channel_get_json(int ch_idx, int id, typval_T **rettv)
 {
-    jsonq_T *head = &channels[ch_idx].ch_json_head;
-    jsonq_T *item = head->next;
+    channel_T *channel = &channels[ch_idx];
+    jsonq_T   *head = &channel->ch_json_head;
+    jsonq_T   *item = head->next;
 
     while (item != head)
     {
@@ -779,7 +785,8 @@ channel_get_json(int ch_idx, int id, typval_T **rettv)
 	typval_T    *tv = &l->lv_first->li_tv;
 
 	if ((id > 0 && tv->v_type == VAR_NUMBER && tv->vval.v_number == id)
-	      || id <= 0)
+	      || (id <= 0 && (tv->v_type != VAR_NUMBER
+			       || tv->vval.v_number != channel->ch_block_id)))
 	{
 	    *rettv = item->value;
 	    remove_json_node(item);
@@ -854,6 +861,8 @@ channel_exe_cmd(int idx, char_u *cmd, typval_T *arg2, typval_T *arg3)
 	    typval_T	*tv;
 	    typval_T	err_tv;
 	    char_u	*json = NULL;
+	    channel_T	*channel = &channels[idx];
+	    int		options = channel->ch_mode == MODE_JS ? JSON_JS : 0;
 
 	    /* Don't pollute the display with errors. */
 	    ++emsg_skip;
@@ -861,7 +870,8 @@ channel_exe_cmd(int idx, char_u *cmd, typval_T *arg2, typval_T *arg3)
 	    if (is_eval)
 	    {
 		if (tv != NULL)
-		    json = json_encode_nr_expr(arg3->vval.v_number, tv);
+		    json = json_encode_nr_expr(arg3->vval.v_number, tv,
+								     options);
 		if (tv == NULL || (json != NULL && *json == NUL))
 		{
 		    /* If evaluation failed or the result can't be encoded
@@ -869,7 +879,8 @@ channel_exe_cmd(int idx, char_u *cmd, typval_T *arg2, typval_T *arg3)
 		    err_tv.v_type = VAR_STRING;
 		    err_tv.vval.v_string = (char_u *)"ERROR";
 		    tv = &err_tv;
-		    json = json_encode_nr_expr(arg3->vval.v_number, tv);
+		    json = json_encode_nr_expr(arg3->vval.v_number, tv,
+								     options);
 		}
 		if (json != NULL)
 		{
@@ -900,13 +911,13 @@ may_invoke_callback(int idx)
     typval_T	argv[3];
     int		seq_nr = -1;
     channel_T	*channel = &channels[idx];
-    int		json_mode = channel->ch_json_mode;
+    ch_mode_T	ch_mode = channel->ch_mode;
 
     if (channel->ch_close_cb != NULL)
 	/* this channel is handled elsewhere (netbeans) */
 	return FALSE;
 
-    if (json_mode)
+    if (ch_mode != MODE_RAW)
     {
 	/* Get any json message in the queue. */
 	if (channel_get_json(idx, -1, &listtv) == FAIL)
@@ -1285,15 +1296,20 @@ channel_read_block(int idx)
     int
 channel_read_json_block(int ch_idx, int id, typval_T **rettv)
 {
-    int  more;
+    int		more;
+    channel_T	*channel = &channels[ch_idx];
 
+    channel->ch_block_id = id;
     for (;;)
     {
 	more = channel_parse_json(ch_idx);
 
 	/* search for messsage "id" */
 	if (channel_get_json(ch_idx, id, rettv) == OK)
+	{
+	    channel->ch_block_id = 0;
 	    return OK;
+	}
 
 	if (!more)
 	{
@@ -1303,13 +1319,13 @@ channel_read_json_block(int ch_idx, int id, typval_T **rettv)
 		continue;
 
 	    /* Wait for up to the channel timeout. */
-	    if (channels[ch_idx].ch_fd < 0
-			|| channel_wait(channels[ch_idx].ch_fd,
-					 channels[ch_idx].ch_timeout) == FAIL)
+	    if (channel->ch_fd < 0 || channel_wait(channel->ch_fd,
+						 channel->ch_timeout) == FAIL)
 		break;
 	    channel_read(ch_idx);
 	}
     }
+    channel->ch_block_id = 0;
     return FAIL;
 }
 
@@ -1509,4 +1525,17 @@ set_ref_in_channel(int copyID)
     }
     return abort;
 }
+
+/*
+ * Return the mode of channel "idx".
+ * If "idx" is invalid returns MODE_JSON.
+ */
+    ch_mode_T
+channel_get_mode(int idx)
+{
+    if (idx < 0 || idx >= channel_count)
+	return MODE_JSON;
+    return channels[idx].ch_mode;
+}
+
 #endif /* FEAT_CHANNEL */
