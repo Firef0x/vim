@@ -118,6 +118,13 @@ func s:communicate(port)
   call assert_equal(handle, s:responseHandle)
   call assert_equal('got it', s:responseMsg)
 
+  let s:responseHandle = -1
+  let s:responseMsg = ''
+  call ch_sendexpr(handle, 'hello!', function('s:RequestHandler'))
+  sleep 10m
+  call assert_equal(handle, s:responseHandle)
+  call assert_equal('got it', s:responseMsg)
+
   " Send an eval request that works.
   call assert_equal('ok', ch_sendexpr(handle, 'eval-works'))
   sleep 10m
@@ -206,13 +213,12 @@ endfunc
 
 let s:reply = ""
 func s:Handler(chan, msg)
+  unlet s:reply
   let s:reply = a:msg
 endfunc
 
 func s:channel_handler(port)
-  let chopt = copy(s:chopt)
-  let chopt['callback'] = 's:Handler'
-  let handle = ch_open('localhost:' . a:port, chopt)
+  let handle = ch_open('localhost:' . a:port, s:chopt)
   if handle < 0
     call assert_false(1, "Can't open channel")
     return
@@ -230,7 +236,11 @@ func s:channel_handler(port)
 endfunc
 
 func Test_channel_handler()
+  let s:chopt.callback = 's:Handler'
   call s:run_server('s:channel_handler')
+  let s:chopt.callback = function('s:Handler')
+  call s:run_server('s:channel_handler')
+  unlet s:chopt.callback
 endfunc
 
 " Test that trying to connect to a non-existing port fails quickly.
@@ -256,4 +266,21 @@ func Test_connect_waittime()
     let elapsed = reltime(start)
     call assert_true(reltimefloat(elapsed) < (has('unix') ? 1.0 : 3.0))
   endif
+endfunc
+
+func Test_pipe()
+  if !has('job') || !has('unix')
+    return
+  endif
+  let job = job_start("python test_channel_pipe.py")
+  call assert_equal("run", job_status(job))
+  try
+    let handle = job_getchannel(job)
+    call ch_sendraw(handle, "echo something\n", 0)
+    call assert_equal("something\n", ch_readraw(handle))
+    let reply = ch_sendraw(handle, "quit\n")
+    call assert_equal("Goodbye!\n", reply)
+  finally
+    call job_stop(job)
+  endtry
 endfunc

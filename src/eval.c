@@ -503,8 +503,10 @@ static void f_call(typval_T *argvars, typval_T *rettv);
 static void f_ceil(typval_T *argvars, typval_T *rettv);
 #endif
 #ifdef FEAT_CHANNEL
-static void f_ch_open(typval_T *argvars, typval_T *rettv);
 static void f_ch_close(typval_T *argvars, typval_T *rettv);
+static void f_ch_logfile(typval_T *argvars, typval_T *rettv);
+static void f_ch_open(typval_T *argvars, typval_T *rettv);
+static void f_ch_readraw(typval_T *argvars, typval_T *rettv);
 static void f_ch_sendexpr(typval_T *argvars, typval_T *rettv);
 static void f_ch_sendraw(typval_T *argvars, typval_T *rettv);
 #endif
@@ -624,15 +626,16 @@ static void f_isdirectory(typval_T *argvars, typval_T *rettv);
 static void f_islocked(typval_T *argvars, typval_T *rettv);
 static void f_items(typval_T *argvars, typval_T *rettv);
 #ifdef FEAT_JOB
+static void f_job_getchannel(typval_T *argvars, typval_T *rettv);
 static void f_job_start(typval_T *argvars, typval_T *rettv);
 static void f_job_stop(typval_T *argvars, typval_T *rettv);
 static void f_job_status(typval_T *argvars, typval_T *rettv);
 #endif
 static void f_join(typval_T *argvars, typval_T *rettv);
-static void f_jsdecode(typval_T *argvars, typval_T *rettv);
-static void f_jsencode(typval_T *argvars, typval_T *rettv);
-static void f_jsondecode(typval_T *argvars, typval_T *rettv);
-static void f_jsonencode(typval_T *argvars, typval_T *rettv);
+static void f_js_decode(typval_T *argvars, typval_T *rettv);
+static void f_js_encode(typval_T *argvars, typval_T *rettv);
+static void f_json_decode(typval_T *argvars, typval_T *rettv);
+static void f_json_encode(typval_T *argvars, typval_T *rettv);
 static void f_keys(typval_T *argvars, typval_T *rettv);
 static void f_last_buffer_nr(typval_T *argvars, typval_T *rettv);
 static void f_len(typval_T *argvars, typval_T *rettv);
@@ -7720,8 +7723,9 @@ failret:
     static void
 job_free(job_T *job)
 {
-    /* TODO: free any handles */
-
+    if (job->jv_channel >= 0)
+	channel_close(job->jv_channel);
+    mch_clear_job(job);
     vim_free(job);
 }
 
@@ -8084,7 +8088,9 @@ static struct fst
 #endif
 #ifdef FEAT_CHANNEL
     {"ch_close",	1, 1, f_ch_close},
+    {"ch_logfile",	1, 2, f_ch_logfile},
     {"ch_open",		1, 2, f_ch_open},
+    {"ch_readraw",	1, 2, f_ch_readraw},
     {"ch_sendexpr",	2, 3, f_ch_sendexpr},
     {"ch_sendraw",	2, 3, f_ch_sendraw},
 #endif
@@ -8208,15 +8214,16 @@ static struct fst
     {"islocked",	1, 1, f_islocked},
     {"items",		1, 1, f_items},
 #ifdef FEAT_JOB
+    {"job_getchannel",	1, 1, f_job_getchannel},
     {"job_start",	1, 2, f_job_start},
     {"job_status",	1, 1, f_job_status},
     {"job_stop",	1, 2, f_job_stop},
 #endif
     {"join",		1, 2, f_join},
-    {"jsdecode",	1, 1, f_jsdecode},
-    {"jsencode",	1, 1, f_jsencode},
-    {"jsondecode",	1, 1, f_jsondecode},
-    {"jsonencode",	1, 1, f_jsonencode},
+    {"js_decode",	1, 1, f_js_decode},
+    {"js_encode",	1, 1, f_js_encode},
+    {"json_decode",	1, 1, f_json_decode},
+    {"json_encode",	1, 1, f_json_encode},
     {"keys",		1, 1, f_keys},
     {"last_buffer_nr",	0, 0, f_last_buffer_nr},/* obsolete */
     {"len",		1, 1, f_len},
@@ -9789,7 +9796,7 @@ get_channel_arg(typval_T *tv)
     }
     ch_idx = tv->vval.v_number;
 
-    if (!channel_is_open(ch_idx))
+    if (!channel_can_write_to(ch_idx))
     {
 	EMSGN(_("E906: not an open channel"), ch_idx);
 	return -1;
@@ -9823,6 +9830,32 @@ get_callback(typval_T *arg)
 	return (char_u *)"";
     EMSG(_("E999: Invalid callback argument"));
     return NULL;
+}
+
+/*
+ * "ch_logfile()" function
+ */
+    static void
+f_ch_logfile(typval_T *argvars, typval_T *rettv UNUSED)
+{
+    char_u *fname;
+    char_u *opt = (char_u *)"";
+    char_u buf[NUMBUFLEN];
+    FILE   *file = NULL;
+
+    fname = get_tv_string(&argvars[0]);
+    if (argvars[1].v_type == VAR_STRING)
+	opt = get_tv_string_buf(&argvars[1], buf);
+    if (*fname != NUL)
+    {
+	file = fopen((char *)fname, *opt == 'w' ? "w" : "a");
+	if (file == NULL)
+	{
+	    EMSG2(_(e_notopen), fname);
+	    return;
+	}
+    }
+    ch_logfile(file);
 }
 
 /*
@@ -9871,12 +9904,13 @@ f_ch_open(typval_T *argvars, typval_T *rettv)
 
     if (argvars[1].v_type == VAR_DICT)
     {
-	/* parse argdict */
-	dict_T	*dict = argvars[1].vval.v_dict;
+	dict_T	    *dict = argvars[1].vval.v_dict;
+	dictitem_T  *item;
 
-	if (dict_find(dict, (char_u *)"mode", -1) != NULL)
+	/* parse argdict */
+	if ((item = dict_find(dict, (char_u *)"mode", -1)) != NULL)
 	{
-	    mode = get_dict_string(dict, (char_u *)"mode", FALSE);
+	    mode = get_tv_string(&item->di_tv);
 	    if (STRCMP(mode, "raw") == 0)
 		ch_mode = MODE_RAW;
 	    else if (STRCMP(mode, "js") == 0)
@@ -9889,12 +9923,12 @@ f_ch_open(typval_T *argvars, typval_T *rettv)
 		return;
 	    }
 	}
-	if (dict_find(dict, (char_u *)"waittime", -1) != NULL)
-	    waittime = get_dict_number(dict, (char_u *)"waittime");
-	if (dict_find(dict, (char_u *)"timeout", -1) != NULL)
-	    timeout = get_dict_number(dict, (char_u *)"timeout");
-	if (dict_find(dict, (char_u *)"callback", -1) != NULL)
-	    callback = get_dict_string(dict, (char_u *)"callback", FALSE);
+	if ((item = dict_find(dict, (char_u *)"waittime", -1)) != NULL)
+	    waittime = get_tv_number(&item->di_tv);
+	if ((item = dict_find(dict, (char_u *)"timeout", -1)) != NULL)
+	    timeout = get_tv_number(&item->di_tv);
+	if ((item = dict_find(dict, (char_u *)"callback", -1)) != NULL)
+	    callback = get_callback(&item->di_tv);
     }
     if (waittime < 0 || timeout < 0)
     {
@@ -9911,6 +9945,27 @@ f_ch_open(typval_T *argvars, typval_T *rettv)
 	    channel_set_callback(ch_idx, callback);
     }
     rettv->vval.v_number = ch_idx;
+}
+
+/*
+ * "ch_readraw()" function
+ */
+    static void
+f_ch_readraw(typval_T *argvars, typval_T *rettv)
+{
+    int		ch_idx;
+
+    /* return an empty string by default */
+    rettv->v_type = VAR_STRING;
+    rettv->vval.v_string = NULL;
+
+    ch_idx = get_channel_arg(&argvars[0]);
+    if (ch_idx < 0)
+    {
+	EMSG(_(e_invarg));
+	return;
+    }
+    rettv->vval.v_string = channel_read_block(ch_idx);
 }
 
 /*
@@ -14300,6 +14355,23 @@ f_items(typval_T *argvars, typval_T *rettv)
 
 #ifdef FEAT_JOB
 /*
+ * "job_getchannel()" function
+ */
+    static void
+f_job_getchannel(typval_T *argvars, typval_T *rettv)
+{
+    if (argvars[0].v_type != VAR_JOB)
+	EMSG(_(e_invarg));
+    else
+    {
+	job_T *job = argvars[0].vval.v_job;
+
+	rettv->v_type = VAR_NUMBER;
+	rettv->vval.v_number = job->jv_channel;
+    }
+}
+
+/*
  * "job_start()" function
  */
     static void
@@ -14368,9 +14440,11 @@ f_job_start(typval_T *argvars UNUSED, typval_T *rettv)
 		s = vim_strsave_shellescape(s, FALSE, TRUE);
 		if (s == NULL)
 		    goto theend;
+		ga_concat(&ga, s);
+		vim_free(s);
 	    }
-	    ga_concat(&ga, s);
-	    vim_free(s);
+	    else
+		ga_concat(&ga, s);
 	    if (li->li_next != NULL)
 		ga_append(&ga, ' ');
 #endif
@@ -14399,7 +14473,7 @@ theend:
  * "job_status()" function
  */
     static void
-f_job_status(typval_T *argvars UNUSED, typval_T *rettv UNUSED)
+f_job_status(typval_T *argvars, typval_T *rettv)
 {
     char *result;
 
@@ -14487,10 +14561,10 @@ f_join(typval_T *argvars, typval_T *rettv)
 }
 
 /*
- * "jsdecode()" function
+ * "js_decode()" function
  */
     static void
-f_jsdecode(typval_T *argvars, typval_T *rettv)
+f_js_decode(typval_T *argvars, typval_T *rettv)
 {
     js_read_T	reader;
 
@@ -14502,20 +14576,20 @@ f_jsdecode(typval_T *argvars, typval_T *rettv)
 }
 
 /*
- * "jsencode()" function
+ * "js_encode()" function
  */
     static void
-f_jsencode(typval_T *argvars, typval_T *rettv)
+f_js_encode(typval_T *argvars, typval_T *rettv)
 {
     rettv->v_type = VAR_STRING;
     rettv->vval.v_string = json_encode(&argvars[0], JSON_JS);
 }
 
 /*
- * "jsondecode()" function
+ * "json_decode()" function
  */
     static void
-f_jsondecode(typval_T *argvars, typval_T *rettv)
+f_json_decode(typval_T *argvars, typval_T *rettv)
 {
     js_read_T	reader;
 
@@ -14527,10 +14601,10 @@ f_jsondecode(typval_T *argvars, typval_T *rettv)
 }
 
 /*
- * "jsonencode()" function
+ * "json_encode()" function
  */
     static void
-f_jsonencode(typval_T *argvars, typval_T *rettv)
+f_json_encode(typval_T *argvars, typval_T *rettv)
 {
     rettv->v_type = VAR_STRING;
     rettv->vval.v_string = json_encode(&argvars[0], 0);
@@ -21622,7 +21696,8 @@ get_tv_string_buf_chk(typval_T *varp, char_u *buf)
 			    "process %ld %s", (long)job->jv_pid, status);
 # elif defined(WIN32)
 		vim_snprintf((char *)buf, NUMBUFLEN,
-			    "process %ld %s", (long)job->jv_pi.dwProcessId,
+			    "process %ld %s",
+			    (long)job->jv_proc_info.dwProcessId,
 			    status);
 # else
 		/* fall-back */
