@@ -7730,12 +7730,21 @@ failret:
     return OK;
 }
 
-#ifdef FEAT_CHANNEL
-    static void
+#if defined(FEAT_CHANNEL) || defined(PROTO)
+/*
+ * Decrement the reference count on "channel" and free it when it goes down to
+ * zero.
+ * Returns TRUE when the channel was freed.
+ */
+    int
 channel_unref(channel_T *channel)
 {
     if (channel != NULL && --channel->ch_refcount <= 0)
+    {
 	channel_free(channel);
+	return TRUE;
+    }
+    return FALSE;
 }
 #endif
 
@@ -9175,6 +9184,38 @@ prepare_assert_error(garray_T *gap)
 }
 
 /*
+ * Append "str" to "gap", escaping unprintable characters.
+ * Changes NL to \n, CR to \r, etc.
+ */
+    static void
+ga_concat_esc(garray_T *gap, char_u *str)
+{
+    char_u  *p;
+    char_u  buf[NUMBUFLEN];
+
+    for (p = str; *p != NUL; ++p)
+	switch (*p)
+	{
+	    case BS: ga_concat(gap, (char_u *)"\\b"); break;
+	    case ESC: ga_concat(gap, (char_u *)"\\e"); break;
+	    case FF: ga_concat(gap, (char_u *)"\\f"); break;
+	    case NL: ga_concat(gap, (char_u *)"\\n"); break;
+	    case TAB: ga_concat(gap, (char_u *)"\\t"); break;
+	    case CAR: ga_concat(gap, (char_u *)"\\r"); break;
+	    case '\\': ga_concat(gap, (char_u *)"\\\\"); break;
+	    default:
+		if (*p < ' ')
+		{
+		    vim_snprintf((char *)buf, NUMBUFLEN, "\\x%02x", *p);
+		    ga_concat(gap, buf);
+		}
+		else
+		    ga_append(gap, *p);
+		break;
+	}
+}
+
+/*
  * Fill "gap" with information about an assert error.
  */
     static void
@@ -9198,13 +9239,13 @@ fill_assert_error(
 	ga_concat(gap, (char_u *)"Expected ");
 	if (exp_str == NULL)
 	{
-	    ga_concat(gap, tv2string(exp_tv, &tofree, numbuf, 0));
+	    ga_concat_esc(gap, tv2string(exp_tv, &tofree, numbuf, 0));
 	    vim_free(tofree);
 	}
 	else
-	    ga_concat(gap, exp_str);
+	    ga_concat_esc(gap, exp_str);
 	ga_concat(gap, (char_u *)" but got ");
-	ga_concat(gap, tv2string(got_tv, &tofree, numbuf, 0));
+	ga_concat_esc(gap, tv2string(got_tv, &tofree, numbuf, 0));
 	vim_free(tofree);
     }
 }
@@ -13076,7 +13117,10 @@ f_has(typval_T *argvars, typval_T *rettv)
 	"mac",
 #endif
 #if defined(MACOS_X_UNIX)
-	"macunix",
+	"macunix",  /* built with 'darwin' enabled */
+#endif
+#if defined(__APPLE__) && __APPLE__ == 1
+	"osx",	    /* built with or without 'darwin' enabled */
 #endif
 #ifdef __QNX__
 	"qnx",
@@ -14510,7 +14554,7 @@ f_job_start(typval_T *argvars UNUSED, typval_T *rettv)
 #ifdef USE_ARGV
     mch_start_job(argv, job);
 #else
-    mch_start_job(cmd, job);
+    mch_start_job((char *)cmd, job);
 #endif
 
 theend:
@@ -16366,7 +16410,7 @@ f_remote_peek(typval_T *argvars UNUSED, typval_T *rettv)
 	return;		/* type error; errmsg already given */
     }
 # ifdef WIN32
-    sscanf(serverid, SCANF_HEX_LONG_U, &n);
+    sscanf((const char *)serverid, SCANF_HEX_LONG_U, &n);
     if (n == 0)
 	rettv->vval.v_number = -1;
     else
@@ -16412,7 +16456,7 @@ f_remote_read(typval_T *argvars UNUSED, typval_T *rettv)
 	/* The server's HWND is encoded in the 'id' parameter */
 	long_u		n = 0;
 
-	sscanf(serverid, SCANF_HEX_LONG_U, &n);
+	sscanf((char *)serverid, SCANF_HEX_LONG_U, &n);
 	if (n != 0)
 	    r = serverGetReply((HWND)n, FALSE, TRUE, TRUE);
 	if (r == NULL)
@@ -21787,7 +21831,10 @@ get_tv_string_buf_chk(typval_T *varp, char_u *buf)
 		channel_T *channel = varp->vval.v_channel;
 		char      *status = channel_status(channel);
 
-		vim_snprintf((char *)buf, NUMBUFLEN,
+		if (channel == NULL)
+		    vim_snprintf((char *)buf, NUMBUFLEN, "channel %s", status);
+		else
+		    vim_snprintf((char *)buf, NUMBUFLEN,
 				     "channel %d %s", channel->ch_id, status);
 		return buf;
 	    }
@@ -22426,7 +22473,8 @@ copy_tv(typval_T *from, typval_T *to)
 	case VAR_CHANNEL:
 #ifdef FEAT_CHANNEL
 	    to->vval.v_channel = from->vval.v_channel;
-	    ++to->vval.v_channel->ch_refcount;
+	    if (to->vval.v_channel != NULL)
+		++to->vval.v_channel->ch_refcount;
 	    break;
 #endif
 	case VAR_STRING:
@@ -25367,7 +25415,7 @@ get_short_pathname(char_u **fnamep, char_u **bufp, int *fnamelen)
     char_u	*newbuf;
 
     len = *fnamelen;
-    l = GetShortPathName(*fnamep, *fnamep, len);
+    l = GetShortPathName((LPSTR)*fnamep, (LPSTR)*fnamep, len);
     if (l > len - 1)
     {
 	/* If that doesn't work (not enough space), then save the string
@@ -25380,7 +25428,7 @@ get_short_pathname(char_u **fnamep, char_u **bufp, int *fnamelen)
 	*fnamep = *bufp = newbuf;
 
 	/* Really should always succeed, as the buffer is big enough. */
-	l = GetShortPathName(*fnamep, *fnamep, l+1);
+	l = GetShortPathName((LPSTR)*fnamep, (LPSTR)*fnamep, l+1);
     }
 
     *fnamelen = l;
@@ -25672,7 +25720,7 @@ repeat:
 	    p = alloc(_MAX_PATH + 1);
 	    if (p != NULL)
 	    {
-		if (GetLongPathName(*fnamep, p, _MAX_PATH))
+		if (GetLongPathName((LPSTR)*fnamep, (LPSTR)p, _MAX_PATH))
 		{
 		    vim_free(*bufp);
 		    *bufp = *fnamep = p;
