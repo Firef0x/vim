@@ -501,6 +501,9 @@ static void f_ceil(typval_T *argvars, typval_T *rettv);
 #endif
 #ifdef FEAT_CHANNEL
 static void f_ch_close(typval_T *argvars, typval_T *rettv);
+# ifdef FEAT_JOB
+static void f_ch_getjob(typval_T *argvars, typval_T *rettv);
+# endif
 static void f_ch_log(typval_T *argvars, typval_T *rettv);
 static void f_ch_logfile(typval_T *argvars, typval_T *rettv);
 static void f_ch_open(typval_T *argvars, typval_T *rettv);
@@ -8186,6 +8189,9 @@ static struct fst
 #endif
 #ifdef FEAT_CHANNEL
     {"ch_close",	1, 1, f_ch_close},
+# ifdef FEAT_JOB
+    {"ch_getjob",	1, 1, f_ch_getjob},
+# endif
     {"ch_log",		1, 2, f_ch_log},
     {"ch_logfile",	1, 2, f_ch_logfile},
     {"ch_open",		1, 2, f_ch_open},
@@ -10129,7 +10135,7 @@ get_job_options(typval_T *tv, jobopt_T *opt, int supported)
 		    break;
 		opt->jo_set |= JO_EXIT_CB;
 		opt->jo_exit_cb = get_tv_string_buf_chk(item, opt->jo_ecb_buf);
-		if (opt->jo_ecb_buf == NULL)
+		if (opt->jo_exit_cb == NULL)
 		{
 		    EMSG2(_(e_invarg2), "exit-cb");
 		    return FAIL;
@@ -10185,6 +10191,25 @@ f_ch_close(typval_T *argvars, typval_T *rettv UNUSED)
     if (channel != NULL)
 	channel_close(channel);
 }
+
+# ifdef FEAT_JOB
+/*
+ * "ch_getjob()" function
+ */
+    static void
+f_ch_getjob(typval_T *argvars, typval_T *rettv)
+{
+    channel_T *channel = get_channel_arg(&argvars[0]);
+
+    if (channel != NULL)
+    {
+	rettv->v_type = VAR_JOB;
+	rettv->vval.v_job = channel->ch_job;
+	if (channel->ch_job != NULL)
+	    ++channel->ch_job->jv_refcount;
+    }
+}
+# endif
 
 /*
  * "ch_log()" function
@@ -13760,6 +13785,7 @@ f_has(typval_T *argvars, typval_T *rettv)
 #ifdef FEAT_OLE
 	"ole",
 #endif
+	"packages",
 #ifdef FEAT_PATH_EXTRA
 	"path_extra",
 #endif
@@ -15013,7 +15039,8 @@ job_status(job_T *job)
 	    typval_T	rettv;
 	    int		dummy;
 
-	    /* invoke the exit callback */
+	    /* invoke the exit callback; make sure the refcount is > 0 */
+	    ++job->jv_refcount;
 	    argv[0].v_type = VAR_JOB;
 	    argv[0].vval.v_job = job;
 	    argv[1].v_type = VAR_NUMBER;
@@ -15021,10 +15048,11 @@ job_status(job_T *job)
 	    call_func(job->jv_exit_cb, (int)STRLEN(job->jv_exit_cb),
 				 &rettv, 2, argv, 0L, 0L, &dummy, TRUE, NULL);
 	    clear_tv(&rettv);
+	    --job->jv_refcount;
 	}
 	if (job->jv_status == JOB_ENDED && job->jv_refcount == 0)
 	{
-	    /* The job already was unreferenced, now that it ended it can be
+	    /* The job was already unreferenced, now that it ended it can be
 	     * freed. Careful: caller must not use "job" after this! */
 	    job_free(job);
 	}
