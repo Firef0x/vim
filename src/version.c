@@ -554,11 +554,6 @@ static char *(features[]) =
 #else
 	"-smartindent",
 #endif
-#ifdef FEAT_SNIFF
-	"+sniff",
-#else
-	"-sniff",
-#endif
 #ifdef STARTUPTIME
 	"+startuptime",
 #else
@@ -748,6 +743,36 @@ static char *(features[]) =
 
 static int included_patches[] =
 {   /* Add new patch number below this line */
+/**/
+    1439,
+/**/
+    1438,
+/**/
+    1437,
+/**/
+    1436,
+/**/
+    1435,
+/**/
+    1434,
+/**/
+    1433,
+/**/
+    1432,
+/**/
+    1431,
+/**/
+    1430,
+/**/
+    1429,
+/**/
+    1428,
+/**/
+    1427,
+/**/
+    1426,
+/**/
+    1425,
 /**/
     1424,
 /**/
