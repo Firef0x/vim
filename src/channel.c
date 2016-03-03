@@ -720,10 +720,10 @@ channel_open(
 	     * After putting the socket in non-blocking mode, connect() will
 	     * return EINPROGRESS, select() will not wait (as if writing is
 	     * possible), need to use getsockopt() to check if the socket is
-	     * actually connect.
-	     * We detect an failure to connect when both read and write fds
+	     * actually able to connect.
+	     * We detect an failure to connect when either read and write fds
 	     * are set.  Use getsockopt() to find out what kind of failure. */
-	    if (FD_ISSET(sd, &rfds) && FD_ISSET(sd, &wfds))
+	    if (FD_ISSET(sd, &rfds) || FD_ISSET(sd, &wfds))
 	    {
 		ret = getsockopt(sd,
 			    SOL_SOCKET, SO_ERROR, &so_error, &so_error_len);
@@ -1390,6 +1390,23 @@ channel_exe_cmd(channel_T *channel, int part, typval_T *argv)
     }
 }
 
+    static void
+invoke_one_time_callback(
+	channel_T   *channel,
+	cbq_T	    *cbhead,
+	cbq_T	    *item,
+	typval_T    *argv)
+{
+    ch_logs(channel, "Invoking one-time callback %s",
+						   (char *)item->cq_callback);
+    /* Remove the item from the list first, if the callback
+     * invokes ch_close() the list will be cleared. */
+    remove_cb_node(cbhead, item);
+    invoke_callback(channel, item->cq_callback, argv);
+    vim_free(item->cq_callback);
+    vim_free(item);
+}
+
 /*
  * Invoke a callback for "channel"/"part" if needed.
  * Return TRUE when a message was handled, there might be another one.
@@ -1402,6 +1419,8 @@ may_invoke_callback(channel_T *channel, int part)
     typval_T	argv[CH_JSON_MAX_ARGS];
     int		seq_nr = -1;
     ch_mode_T	ch_mode = channel->ch_part[part].ch_mode;
+    cbq_T	*cbhead = &channel->ch_part[part].ch_cb_head;
+    cbq_T	*cbitem = cbhead->cq_next;
     char_u	*callback = NULL;
     buf_T	*buffer = NULL;
 
@@ -1409,7 +1428,10 @@ may_invoke_callback(channel_T *channel, int part)
 	/* this channel is handled elsewhere (netbeans) */
 	return FALSE;
 
-    if (channel->ch_part[part].ch_callback != NULL)
+    /* use a message-specific callback, part callback or channel callback */
+    if (cbitem != NULL)
+	callback = cbitem->cq_callback;
+    else if (channel->ch_part[part].ch_callback != NULL)
 	callback = channel->ch_part[part].ch_callback;
     else
 	callback = channel->ch_callback;
@@ -1516,33 +1538,27 @@ may_invoke_callback(channel_T *channel, int part)
 	     * get everything we have. */
 	    msg = channel_get_all(channel, part);
 
+	if (msg == NULL)
+	    return FALSE; /* out of memory (and avoids Coverity warning) */
+
 	argv[1].v_type = VAR_STRING;
 	argv[1].vval.v_string = msg;
     }
 
     if (seq_nr > 0)
     {
-	cbq_T	*head = &channel->ch_part[part].ch_cb_head;
-	cbq_T	*item = head->cq_next;
 	int	done = FALSE;
 
 	/* invoke the one-time callback with the matching nr */
-	while (item != NULL)
+	while (cbitem != NULL)
 	{
-	    if (item->cq_seq_nr == seq_nr)
+	    if (cbitem->cq_seq_nr == seq_nr)
 	    {
-		ch_logs(channel, "Invoking one-time callback %s",
-						   (char *)item->cq_callback);
-		/* Remove the item from the list first, if the callback
-		 * invokes ch_close() the list will be cleared. */
-		remove_cb_node(head, item);
-		invoke_callback(channel, item->cq_callback, argv);
-		vim_free(item->cq_callback);
-		vim_free(item);
+		invoke_one_time_callback(channel, cbhead, cbitem, argv);
 		done = TRUE;
 		break;
 	    }
-	    item = item->cq_next;
+	    cbitem = cbitem->cq_next;
 	}
 	if (!done)
 	    ch_logn(channel, "Dropping message %d without callback", seq_nr);
@@ -1551,21 +1567,22 @@ may_invoke_callback(channel_T *channel, int part)
     {
 	if (buffer != NULL)
 	{
-	    buf_T	*save_curbuf = curbuf;
-	    linenr_T	lnum = buffer->b_ml.ml_line_count;
-
-	    /* Append to the buffer */
-	    ch_logn(channel, "appending line %d to buffer", (int)lnum + 1);
-
-	    curbuf = buffer;
-	    u_sync(TRUE);
-	    u_save(lnum, lnum + 1);
-
 	    if (msg == NULL)
 		/* JSON or JS mode: re-encode the message. */
 		msg = json_encode(listtv, ch_mode);
 	    if (msg != NULL)
 	    {
+		buf_T	    *save_curbuf = curbuf;
+		linenr_T    lnum = buffer->b_ml.ml_line_count;
+
+		/* Append to the buffer */
+		ch_logn(channel, "appending line %d to buffer", (int)lnum + 1);
+
+		curbuf = buffer;
+		u_sync(TRUE);
+		/* ignore undo failure, undo is not very useful here */
+		ignored = u_save(lnum, lnum + 1);
+
 		ml_append(lnum, msg, 0, FALSE);
 		appended_lines_mark(lnum, 1L);
 		curbuf = save_curbuf;
@@ -1595,11 +1612,18 @@ may_invoke_callback(channel_T *channel, int part)
 		}
 	    }
 	}
+
 	if (callback != NULL)
 	{
-	    /* invoke the channel callback */
-	    ch_logs(channel, "Invoking channel callback %s", (char *)callback);
-	    invoke_callback(channel, callback, argv);
+	    if (cbitem != NULL)
+		invoke_one_time_callback(channel, cbhead, cbitem, argv);
+	    else
+	    {
+		/* invoke the channel callback */
+		ch_logs(channel, "Invoking channel callback %s",
+							    (char *)callback);
+		invoke_callback(channel, callback, argv);
+	    }
 	}
     }
     else
