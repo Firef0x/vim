@@ -294,6 +294,72 @@ endfunc
 
 """""""""
 
+let s:ch_reply = ''
+func s:ChHandler(chan, msg)
+  unlet s:ch_reply
+  let s:ch_reply = a:msg
+endfunc
+
+let s:zero_reply = ''
+func s:OneHandler(chan, msg)
+  unlet s:zero_reply
+  let s:zero_reply = a:msg
+endfunc
+
+func s:channel_zero(port)
+  let handle = ch_open('localhost:' . a:port, s:chopt)
+  if ch_status(handle) == "fail"
+    call assert_false(1, "Can't open channel")
+    return
+  endif
+
+  " Check that eval works.
+  call assert_equal('got it', ch_evalexpr(handle, 'hello!'))
+
+  " Check that eval works if a zero id message is sent back.
+  let s:ch_reply = ''
+  call assert_equal('sent zero', ch_evalexpr(handle, 'send zero'))
+  sleep 10m
+  if s:has_handler
+    call assert_equal('zero index', s:ch_reply)
+  else
+    call assert_equal('', s:ch_reply)
+  endif
+
+  " Check that handler works if a zero id message is sent back.
+  let s:ch_reply = ''
+  let s:zero_reply = ''
+  call ch_sendexpr(handle, 'send zero', {'callback': 's:OneHandler'})
+  " Somehow the second message takes a bit of time.
+  for i in range(50)
+    if s:zero_reply == 'sent zero'
+      break
+    endif
+    sleep 10m
+  endfor
+  if s:has_handler
+    call assert_equal('zero index', s:ch_reply)
+  else
+    call assert_equal('', s:ch_reply)
+  endif
+  call assert_equal('sent zero', s:zero_reply)
+endfunc
+
+func Test_zero_reply()
+  call ch_log('Test_zero_reply()')
+  " Run with channel handler
+  let s:has_handler = 1
+  let s:chopt.callback = 's:ChHandler'
+  call s:run_server('s:channel_zero')
+  unlet s:chopt.callback
+
+  " Run without channel handler
+  let s:has_handler = 0
+  call s:run_server('s:channel_zero')
+endfunc
+
+"""""""""
+
 let s:reply1 = ""
 func s:HandleRaw1(chan, msg)
   unlet s:reply1
@@ -339,10 +405,8 @@ func s:raw_one_time_callback(port)
 endfunc
 
 func Test_raw_one_time_callback()
-  call ch_logfile('channellog', 'w')
   call ch_log('Test_raw_one_time_callback()')
   call s:run_server('s:raw_one_time_callback')
-  call ch_logfile('')
 endfunc
 
 """""""""
@@ -420,12 +484,34 @@ func Test_nl_pipe()
     call ch_sendraw(handle, "echo something\n")
     call assert_equal("something", ch_readraw(handle))
 
+    call ch_sendraw(handle, "echoerr wrong\n")
+    call assert_equal("wrong", ch_readraw(handle, {'part': 'err'}))
+
     call ch_sendraw(handle, "double this\n")
     call assert_equal("this", ch_readraw(handle))
     call assert_equal("AND this", ch_readraw(handle))
 
     let reply = ch_evalraw(handle, "quit\n")
     call assert_equal("Goodbye!", reply)
+  finally
+    call job_stop(job)
+  endtry
+endfunc
+
+func Test_nl_err_to_out_pipe()
+  if !has('job')
+    return
+  endif
+  call ch_log('Test_nl_err_to_out_pipe()')
+  let job = job_start(s:python . " test_channel_pipe.py", {'err-io': 'out'})
+  call assert_equal("run", job_status(job))
+  try
+    let handle = job_getchannel(job)
+    call ch_sendraw(handle, "echo something\n")
+    call assert_equal("something", ch_readraw(handle))
+
+    call ch_sendraw(handle, "echoerr wrong\n")
+    call assert_equal("wrong", ch_readraw(handle))
   finally
     call job_stop(job)
   endtry
@@ -457,6 +543,31 @@ func Test_pipe_to_buffer()
   finally
     call job_stop(job)
   endtry
+endfunc
+
+func Test_pipe_from_buffer()
+  if !has('job')
+    return
+  endif
+call ch_logfile('channellog', 'w')
+  call ch_log('Test_pipe_from_buffer()')
+
+  sp pipe-input
+  call setline(1, ['echo one', 'echo two', 'echo three'])
+
+  let job = job_start(s:python . " test_channel_pipe.py",
+	\ {'in-io': 'buffer', 'in-name': 'pipe-input'})
+  call assert_equal("run", job_status(job))
+  try
+    let handle = job_getchannel(job)
+    call assert_equal('one', ch_read(handle))
+    call assert_equal('two', ch_read(handle))
+    call assert_equal('three', ch_read(handle))
+    bwipe!
+  finally
+    call job_stop(job)
+  endtry
+call ch_logfile('')
 endfunc
 
 func Test_pipe_to_nameless_buffer()
