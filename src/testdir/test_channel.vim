@@ -610,13 +610,22 @@ func Test_nl_write_both_file()
   endtry
 endfunc
 
-func Test_pipe_to_buffer()
+func Run_test_pipe_to_buffer(use_name)
   if !has('job')
     return
   endif
   call ch_log('Test_pipe_to_buffer()')
-  let job = job_start(s:python . " test_channel_pipe.py",
-	\ {'out-io': 'buffer', 'out-name': 'pipe-output'})
+  let options = {'out-io': 'buffer'}
+  if a:use_name
+    let options['out-name'] = 'pipe-output'
+    let firstline = 'Reading from channel output...'
+  else
+    sp pipe-output
+    let options['out-buf'] = bufnr('%')
+    quit
+    let firstline = ''
+  endif
+  let job = job_start(s:python . " test_channel_pipe.py", options)
   call assert_equal("run", job_status(job))
   try
     let handle = job_getchannel(job)
@@ -626,14 +635,86 @@ func Test_pipe_to_buffer()
     call ch_sendraw(handle, "quit\n")
     sp pipe-output
     call s:waitFor('line("$") >= 6')
-    call assert_equal(['Reading from channel output...', 'line one', 'line two', 'this', 'AND this', 'Goodbye!'], getline(1, '$'))
+    call assert_equal([firstline, 'line one', 'line two', 'this', 'AND this', 'Goodbye!'], getline(1, '$'))
     bwipe!
   finally
     call job_stop(job)
   endtry
 endfunc
 
-func Test_pipe_from_buffer()
+func Test_pipe_to_buffer_name()
+  call Run_test_pipe_to_buffer(1)
+endfunc
+
+func Test_pipe_to_buffer_nr()
+  call Run_test_pipe_to_buffer(0)
+endfunc
+
+func Run_test_pipe_err_to_buffer(use_name)
+  if !has('job')
+    return
+  endif
+  call ch_log('Test_pipe_err_to_buffer()')
+  let options = {'err-io': 'buffer'}
+  if a:use_name
+    let options['err-name'] = 'pipe-err'
+    let firstline = 'Reading from channel error...'
+  else
+    sp pipe-err
+    let options['err-buf'] = bufnr('%')
+    quit
+    let firstline = ''
+  endif
+  let job = job_start(s:python . " test_channel_pipe.py", options)
+  call assert_equal("run", job_status(job))
+  try
+    let handle = job_getchannel(job)
+    call ch_sendraw(handle, "echoerr line one\n")
+    call ch_sendraw(handle, "echoerr line two\n")
+    call ch_sendraw(handle, "doubleerr this\n")
+    call ch_sendraw(handle, "quit\n")
+    sp pipe-err
+    call s:waitFor('line("$") >= 5')
+    call assert_equal([firstline, 'line one', 'line two', 'this', 'AND this'], getline(1, '$'))
+    bwipe!
+  finally
+    call job_stop(job)
+  endtry
+endfunc
+
+func Test_pipe_err_to_buffer_name()
+  call Run_test_pipe_err_to_buffer(1)
+endfunc
+  
+func Test_pipe_err_to_buffer_nr()
+  call Run_test_pipe_err_to_buffer(0)
+endfunc
+  
+func Test_pipe_both_to_buffer()
+  if !has('job')
+    return
+  endif
+  call ch_log('Test_pipe_both_to_buffer()')
+  let job = job_start(s:python . " test_channel_pipe.py",
+	\ {'out-io': 'buffer', 'out-name': 'pipe-err', 'err-io': 'out'})
+  call assert_equal("run", job_status(job))
+  try
+    let handle = job_getchannel(job)
+    call ch_sendraw(handle, "echo line one\n")
+    call ch_sendraw(handle, "echoerr line two\n")
+    call ch_sendraw(handle, "double this\n")
+    call ch_sendraw(handle, "doubleerr that\n")
+    call ch_sendraw(handle, "quit\n")
+    sp pipe-err
+    call s:waitFor('line("$") >= 7')
+    call assert_equal(['Reading from channel output...', 'line one', 'line two', 'this', 'AND this', 'that', 'AND that', 'Goodbye!'], getline(1, '$'))
+    bwipe!
+  finally
+    call job_stop(job)
+  endtry
+endfunc
+
+func Run_test_pipe_from_buffer(use_name)
   if !has('job')
     return
   endif
@@ -641,9 +722,14 @@ func Test_pipe_from_buffer()
 
   sp pipe-input
   call setline(1, ['echo one', 'echo two', 'echo three'])
+  let options = {'in-io': 'buffer'}
+  if a:use_name
+    let options['in-name'] = 'pipe-input'
+  else
+    let options['in-buf'] = bufnr('%')
+  endif
 
-  let job = job_start(s:python . " test_channel_pipe.py",
-	\ {'in-io': 'buffer', 'in-name': 'pipe-input'})
+  let job = job_start(s:python . " test_channel_pipe.py", options)
   call assert_equal("run", job_status(job))
   try
     let handle = job_getchannel(job)
@@ -654,6 +740,14 @@ func Test_pipe_from_buffer()
   finally
     call job_stop(job)
   endtry
+endfunc
+
+func Test_pipe_from_buffer_name()
+  call Run_test_pipe_from_buffer(1)
+endfunc
+
+func Test_pipe_from_buffer_nr()
+  call Run_test_pipe_from_buffer(0)
 endfunc
 
 func Test_pipe_to_nameless_buffer()
@@ -777,10 +871,6 @@ endfunc
 
 func Test_pipe_null()
   if !has('job')
-    return
-  endif
-  " TODO: implement this for MS-Windows
-  if !has('unix')
     return
   endif
   call ch_log('Test_pipe_null()')
