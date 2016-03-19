@@ -317,6 +317,23 @@ func Test_errortitle()
   augroup! QfBufWinEnter
 endfunc
 
+func Test_vimgreptitle()
+  augroup QfBufWinEnter
+    au!
+    au BufWinEnter * :let g:a=get(w:, 'quickfix_title', 'NONE')
+  augroup END
+  try
+    vimgrep /pattern/j file
+  catch /E480/
+  endtry
+  copen
+  call assert_equal(':    vimgrep /pattern/j file', g:a)
+  augroup QfBufWinEnter
+    au!
+  augroup END
+  augroup! QfBufWinEnter
+endfunc
+
 function XqfTitleTests(cchar)
   let Xgetexpr = a:cchar . 'getexpr'
   if a:cchar == 'c'
@@ -475,6 +492,25 @@ function Test_locationlist()
     call assert_equal('test://quux.txt', bufferName)
 
     wincmd n | only
+
+    augroup! testgroup
+endfunction
+
+function Test_locationlist_curwin_was_closed()
+    augroup testgroup
+      au!
+      autocmd BufReadCmd t call R(expand("<amatch>"))
+    augroup END
+
+    function R(n)
+      quit
+    endfunc
+
+    new
+    let q = []
+    call add(q, {'filename': 't' })
+    call setloclist(0, q)
+    call assert_fails('lrewind', 'E924:')
 
     augroup! testgroup
 endfunction

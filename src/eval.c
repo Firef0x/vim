@@ -4555,33 +4555,14 @@ eval4(char_u **arg, typval_T *rettv, int evaluate)
 	    else if (rettv->v_type == VAR_FUNC || var2.v_type == VAR_FUNC
 		|| rettv->v_type == VAR_PARTIAL || var2.v_type == VAR_PARTIAL)
 	    {
-		if (rettv->v_type != var2.v_type
-			|| (type != TYPE_EQUAL && type != TYPE_NEQUAL))
+		if (type != TYPE_EQUAL && type != TYPE_NEQUAL)
 		{
-		    if (rettv->v_type != var2.v_type)
-			EMSG(_("E693: Can only compare Funcref with Funcref"));
-		    else
-			EMSG(_("E694: Invalid operation for Funcrefs"));
+		    EMSG(_("E694: Invalid operation for Funcrefs"));
 		    clear_tv(rettv);
 		    clear_tv(&var2);
 		    return FAIL;
 		}
-		else if (rettv->v_type == VAR_PARTIAL)
-		{
-		    /* Partials are only equal when identical. */
-		    n1 = rettv->vval.v_partial != NULL
-			      && rettv->vval.v_partial == var2.vval.v_partial;
-		}
-		else
-		{
-		    /* Compare two Funcrefs for being equal or unequal. */
-		    if (rettv->vval.v_string == NULL
-						|| var2.vval.v_string == NULL)
-			n1 = FALSE;
-		    else
-			n1 = STRCMP(rettv->vval.v_string,
-						     var2.vval.v_string) == 0;
-		}
+		n1 = tv_equal(rettv, &var2, FALSE, FALSE);
 		if (type == TYPE_NEQUAL)
 		    n1 = !n1;
 	    }
@@ -6203,6 +6184,19 @@ tv_equal(
     static int  recursive_cnt = 0;	    /* catch recursive loops */
     int		r;
 
+    /* For VAR_FUNC and VAR_PARTIAL only compare the function name. */
+    if ((tv1->v_type == VAR_FUNC
+		|| (tv1->v_type == VAR_PARTIAL && tv1->vval.v_partial != NULL))
+	    && (tv2->v_type == VAR_FUNC
+		|| (tv2->v_type == VAR_PARTIAL && tv2->vval.v_partial != NULL)))
+    {
+	s1 = tv1->v_type == VAR_FUNC ? tv1->vval.v_string
+					       : tv1->vval.v_partial->pt_name;
+	s2 = tv2->v_type == VAR_FUNC ? tv2->vval.v_string
+					       : tv2->vval.v_partial->pt_name;
+	return (s1 != NULL && s2 != NULL && STRCMP(s1, s2) == 0);
+    }
+
     if (tv1->v_type != tv2->v_type)
 	return FALSE;
 
@@ -6234,15 +6228,6 @@ tv_equal(
 	    --recursive_cnt;
 	    return r;
 
-	case VAR_FUNC:
-	    return (tv1->vval.v_string != NULL
-		    && tv2->vval.v_string != NULL
-		    && STRCMP(tv1->vval.v_string, tv2->vval.v_string) == 0);
-
-	case VAR_PARTIAL:
-	    return tv1->vval.v_partial != NULL
-		    && tv1->vval.v_partial == tv2->vval.v_partial;
-
 	case VAR_NUMBER:
 	    return tv1->vval.v_number == tv2->vval.v_number;
 
@@ -6266,6 +6251,8 @@ tv_equal(
 #ifdef FEAT_JOB_CHANNEL
 	    return tv1->vval.v_channel == tv2->vval.v_channel;
 #endif
+	case VAR_FUNC:
+	case VAR_PARTIAL:
 	case VAR_UNKNOWN:
 	    break;
     }
@@ -7910,9 +7897,49 @@ tv2string(
 	    *tofree = string_quote(tv->vval.v_string, TRUE);
 	    return *tofree;
 	case VAR_PARTIAL:
-	    *tofree = string_quote(tv->vval.v_partial == NULL ? NULL
-					 : tv->vval.v_partial->pt_name, TRUE);
-	    return *tofree;
+	    {
+		partial_T   *pt = tv->vval.v_partial;
+		char_u	    *fname = string_quote(pt == NULL ? NULL
+							: pt->pt_name, FALSE);
+		garray_T    ga;
+		int	    i;
+		char_u	    *tf;
+
+		ga_init2(&ga, 1, 100);
+		ga_concat(&ga, (char_u *)"function(");
+		if (fname != NULL)
+		{
+		    ga_concat(&ga, fname);
+		    vim_free(fname);
+		}
+		if (pt != NULL && pt->pt_argc > 0)
+		{
+		    ga_concat(&ga, (char_u *)", [");
+		    for (i = 0; i < pt->pt_argc; ++i)
+		    {
+			if (i > 0)
+			    ga_concat(&ga, (char_u *)", ");
+			ga_concat(&ga,
+			     tv2string(&pt->pt_argv[i], &tf, numbuf, copyID));
+			vim_free(tf);
+		    }
+		    ga_concat(&ga, (char_u *)"]");
+		}
+		if (pt != NULL && pt->pt_dict != NULL)
+		{
+		    typval_T dtv;
+
+		    ga_concat(&ga, (char_u *)", ");
+		    dtv.v_type = VAR_DICT;
+		    dtv.vval.v_dict = pt->pt_dict;
+		    ga_concat(&ga, tv2string(&dtv, &tf, numbuf, copyID));
+		    vim_free(tf);
+		}
+		ga_concat(&ga, (char_u *)")");
+
+		*tofree = ga.ga_data;
+		return *tofree;
+	    }
 	case VAR_STRING:
 	    *tofree = string_quote(tv->vval.v_string, FALSE);
 	    return *tofree;
@@ -11904,7 +11931,9 @@ f_function(typval_T *argvars, typval_T *rettv)
 	    partial_T	*pt = (partial_T *)alloc_clear(sizeof(partial_T));
 
 	    /* result is a VAR_PARTIAL */
-	    if (pt != NULL)
+	    if (pt == NULL)
+		vim_free(name);
+	    else
 	    {
 		if (arg_idx > 0 || (arg_pt != NULL && arg_pt->pt_argc > 0))
 		{
@@ -20396,6 +20425,7 @@ f_type(typval_T *argvars, typval_T *rettv)
     {
 	case VAR_NUMBER: n = 0; break;
 	case VAR_STRING: n = 1; break;
+	case VAR_PARTIAL:
 	case VAR_FUNC:   n = 2; break;
 	case VAR_LIST:   n = 3; break;
 	case VAR_DICT:   n = 4; break;
@@ -20409,7 +20439,6 @@ f_type(typval_T *argvars, typval_T *rettv)
 	     break;
 	case VAR_JOB:     n = 8; break;
 	case VAR_CHANNEL: n = 9; break;
-	case VAR_PARTIAL: n = 10; break;
 	case VAR_UNKNOWN:
 	     EMSG2(_(e_intern2), "f_type(UNKNOWN)");
 	     n = -1;
@@ -21660,7 +21689,6 @@ handle_subscript(
     char_u	*s;
     int		len;
     typval_T	functv;
-    partial_T	*pt = NULL;
 
     while (ret == OK
 	    && (**arg == '['
@@ -21671,6 +21699,8 @@ handle_subscript(
     {
 	if (**arg == '(')
 	{
+	    partial_T	*pt = NULL;
+
 	    /* need to copy the funcref so that we can clear rettv */
 	    if (evaluate)
 	    {

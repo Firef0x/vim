@@ -1795,8 +1795,19 @@ win_found:
 					   oldwin == curwin ? curwin : NULL);
 	}
 	else
+	{
 	    ok = buflist_getfile(qf_ptr->qf_fnum,
 			    (linenr_T)1, GETF_SETMARK | GETF_SWITCH, forceit);
+	    if (qi != &ql_info && !win_valid(oldwin))
+	    {
+		EMSG(_("E924: Current window was closed"));
+		ok = FALSE;
+		qi = NULL;
+		qf_ptr = NULL;
+		opened_window = FALSE;
+	    }
+	}
+
     }
 
     if (ok == OK)
@@ -1899,7 +1910,7 @@ win_found:
 	if (opened_window)
 	    win_close(curwin, TRUE);    /* Close opened window */
 #endif
-	if (qf_ptr->qf_fnum != 0)
+	if (qf_ptr != NULL && qf_ptr->qf_fnum != 0)
 	{
 	    /*
 	     * Couldn't open file, so put index back where it was.  This could
@@ -1913,8 +1924,11 @@ failed:
 	}
     }
 theend:
-    qi->qf_lists[qi->qf_curlist].qf_ptr = qf_ptr;
-    qi->qf_lists[qi->qf_curlist].qf_index = qf_index;
+    if (qi != NULL)
+    {
+	qi->qf_lists[qi->qf_curlist].qf_ptr = qf_ptr;
+	qi->qf_lists[qi->qf_curlist].qf_index = qf_index;
+    }
 #ifdef FEAT_WINDOWS
     if (p_swb != old_swb && opened_window)
     {
@@ -3286,6 +3300,7 @@ ex_vimgrep(exarg_T *eap)
     int		fcount;
     char_u	**fnames;
     char_u	*fname;
+    char_u	*title;
     char_u	*s;
     char_u	*p;
     int		fi;
@@ -3354,6 +3369,7 @@ ex_vimgrep(exarg_T *eap)
 
     /* Get the search pattern: either white-separated or enclosed in // */
     regmatch.regprog = NULL;
+    title = vim_strsave(*eap->cmdlinep);
     p = skip_vimgrep_pat(eap->arg, &s, &flags);
     if (p == NULL)
     {
@@ -3390,7 +3406,7 @@ ex_vimgrep(exarg_T *eap)
 	 eap->cmdidx != CMD_vimgrepadd && eap->cmdidx != CMD_lvimgrepadd)
 					|| qi->qf_curlist == qi->qf_listcount)
 	/* make place for a new list */
-	qf_new_list(qi, *eap->cmdlinep);
+	qf_new_list(qi, title != NULL ? title : *eap->cmdlinep);
     else if (qi->qf_lists[qi->qf_curlist].qf_count > 0)
 	/* Adding to existing list, find last entry. */
 	for (prevp = qi->qf_lists[qi->qf_curlist].qf_start;
@@ -3669,6 +3685,7 @@ ex_vimgrep(exarg_T *eap)
     }
 
 theend:
+    vim_free(title);
     vim_free(dirname_now);
     vim_free(dirname_start);
     vim_free(target_dir);
