@@ -1003,11 +1003,11 @@ find_buffer(char_u *name, int err)
 	buf = buflist_new(name == NULL || *name == NUL ? NULL : name,
 					       NULL, (linenr_T)0, BLN_LISTED);
 	buf_copy_options(buf, BCO_ENTER);
+	curbuf = buf;
 #ifdef FEAT_QUICKFIX
 	set_option_value((char_u *)"bt", 0L, (char_u *)"nofile", OPT_LOCAL);
 	set_option_value((char_u *)"bh", 0L, (char_u *)"hide", OPT_LOCAL);
 #endif
-	curbuf = buf;
 	if (curbuf->b_ml.ml_mfp == NULL)
 	    ml_open(curbuf);
 	ml_replace(1, (char_u *)(err ? "Reading from channel error..."
@@ -1362,7 +1362,7 @@ channel_collapse(channel_T *channel, int part)
  * Returns OK or FAIL.
  */
     static int
-channel_save(channel_T *channel, int part, char_u *buf, int len)
+channel_save(channel_T *channel, int part, char_u *buf, int len, char *lead)
 {
     readq_T *node;
     readq_T *head = &channel->ch_part[part].ch_head;
@@ -1403,9 +1403,9 @@ channel_save(channel_T *channel, int part, char_u *buf, int len)
 	head->rq_prev->rq_next = node;
     head->rq_prev = node;
 
-    if (log_fd != NULL)
+    if (log_fd != NULL && lead != NULL)
     {
-	ch_log_lead("RECV ", channel);
+	ch_log_lead(lead, channel);
 	fprintf(log_fd, "'");
 	if (fwrite(buf, len, 1, log_fd) != 1)
 	    return FAIL;
@@ -1415,7 +1415,7 @@ channel_save(channel_T *channel, int part, char_u *buf, int len)
 }
 
 /*
- * Use the read buffer of "channel"/"part" and parse a JSON messages that is
+ * Use the read buffer of "channel"/"part" and parse a JSON message that is
  * complete.  The messages are added to the queue.
  * Return TRUE if there is more to read.
  */
@@ -1425,7 +1425,9 @@ channel_parse_json(channel_T *channel, int part)
     js_read_T	reader;
     typval_T	listtv;
     jsonq_T	*item;
-    jsonq_T	*head = &channel->ch_part[part].ch_json_head;
+    chanpart_T	*chanpart = &channel->ch_part[part];
+    jsonq_T	*head = &chanpart->ch_json_head;
+    int		status;
     int		ret;
 
     if (channel_peek(channel, part) == NULL)
@@ -1438,15 +1440,23 @@ channel_parse_json(channel_T *channel, int part)
     reader.js_fill = NULL;
     /* reader.js_fill = channel_fill; */
     reader.js_cookie = channel;
-    ret = json_decode(&reader, &listtv,
-		     channel->ch_part[part].ch_mode == MODE_JS ? JSON_JS : 0);
-    if (ret == OK)
+
+    /* When a message is incomplete we wait for a short while for more to
+     * arrive.  After the delay drop the input, otherwise a truncated string
+     * or list will make us hang.  */
+    status = json_decode(&reader, &listtv,
+		     chanpart->ch_mode == MODE_JS ? JSON_JS : 0);
+    if (status == OK)
     {
 	/* Only accept the response when it is a list with at least two
 	 * items. */
 	if (listtv.v_type != VAR_LIST || listtv.vval.v_list->lv_len < 2)
 	{
-	    /* TODO: give error */
+	    if (listtv.v_type != VAR_LIST)
+		ch_error(channel, "Did not receive a list, discarding");
+	    else
+		ch_errorn(channel, "Expected list with two items, got %d",
+						  listtv.vval.v_list->lv_len);
 	    clear_tv(&listtv);
 	}
 	else
@@ -1477,13 +1487,70 @@ channel_parse_json(channel_T *channel, int part)
 	}
     }
 
-    /* Put the unread part back into the channel.
-     * TODO: insert in front */
-    if (reader.js_buf[reader.js_used] != NUL)
+    if (status == OK)
+	chanpart->ch_waiting = FALSE;
+    else if (status == MAYBE)
     {
+	if (!chanpart->ch_waiting)
+	{
+	    /* First time encountering incomplete message, set a deadline of
+	     * 100 msec. */
+	    ch_log(channel, "Incomplete message - wait for more");
+	    reader.js_used = 0;
+	    chanpart->ch_waiting = TRUE;
+#ifdef WIN32
+	    chanpart->ch_deadline = GetTickCount() + 100L;
+#else
+	    gettimeofday(&chanpart->ch_deadline, NULL);
+	    chanpart->ch_deadline.tv_usec += 100 * 1000;
+	    if (chanpart->ch_deadline.tv_usec > 1000 * 1000)
+	    {
+		chanpart->ch_deadline.tv_usec -= 1000 * 1000;
+		++chanpart->ch_deadline.tv_sec;
+	    }
+#endif
+	}
+	else
+	{
+	    int timeout;
+#ifdef WIN32
+	    timeout = GetTickCount() > chanpart->ch_deadline;
+#else
+	    {
+		struct timeval now_tv;
+
+		gettimeofday(&now_tv, NULL);
+		timeout = now_tv.tv_sec > chanpart->ch_deadline.tv_sec
+		      || (now_tv.tv_sec == chanpart->ch_deadline.tv_sec
+			   && now_tv.tv_usec > chanpart->ch_deadline.tv_usec);
+	    }
+#endif
+	    if (timeout)
+	    {
+		status = FAIL;
+		chanpart->ch_waiting = FALSE;
+	    }
+	    else
+	    {
+		reader.js_used = 0;
+		ch_log(channel, "still waiting on incomplete message");
+	    }
+	}
+    }
+
+    if (status == FAIL)
+    {
+	ch_error(channel, "Decoding failed - discarding input");
+	ret = FALSE;
+	chanpart->ch_waiting = FALSE;
+    }
+    else if (reader.js_buf[reader.js_used] != NUL)
+    {
+	/* Put the unread part back into the channel.
+	 * TODO: insert in front */
 	channel_save(channel, part, reader.js_buf + reader.js_used,
-		(int)(reader.js_end - reader.js_buf) - reader.js_used);
-	ret = TRUE;
+		(int)(reader.js_end - reader.js_buf) - reader.js_used, NULL);
+	ret = status == MAYBE ? FALSE: TRUE;
     }
     else
 	ret = FALSE;
@@ -1551,6 +1618,8 @@ channel_get_json(channel_T *channel, int part, int id, typval_T **rettv)
 		 || tv->vval.v_number != channel->ch_part[part].ch_block_id)))
 	{
 	    *rettv = item->jq_value;
+	    if (tv->v_type == VAR_NUMBER)
+		ch_logn(channel, "Getting JSON message %d", tv->vval.v_number);
 	    remove_json_node(head, item);
 	    return OK;
 	}
@@ -1586,12 +1655,14 @@ channel_exe_cmd(channel_T *channel, int part, typval_T *argv)
 
     if (STRCMP(cmd, "ex") == 0)
     {
+	ch_logs(channel, "Executing ex command '%s'", (char *)arg);
 	do_cmdline_cmd(arg);
     }
     else if (STRCMP(cmd, "normal") == 0)
     {
 	exarg_T ea;
 
+	ch_logs(channel, "Executing normal command '%s'", (char *)arg);
 	ea.arg = arg;
 	ea.addr_count = 0;
 	ea.forceit = TRUE; /* no mapping */
@@ -1601,6 +1672,7 @@ channel_exe_cmd(channel_T *channel, int part, typval_T *argv)
     {
 	exarg_T ea;
 
+	ch_log(channel, "redraw");
 	ea.forceit = *arg != NUL;
 	ex_redraw(&ea);
 	showruler(FALSE);
@@ -1642,11 +1714,18 @@ channel_exe_cmd(channel_T *channel, int part, typval_T *argv)
 	    /* Don't pollute the display with errors. */
 	    ++emsg_skip;
 	    if (!is_call)
+	    {
+		ch_logs(channel, "Evaluating expression '%s'", (char *)arg);
 		tv = eval_expr(arg, NULL);
-	    else if (func_call(arg, &argv[2], NULL, NULL, &res_tv) == OK)
-		tv = &res_tv;
+	    }
 	    else
-		tv = NULL;
+	    {
+		ch_logs(channel, "Calling '%s'", (char *)arg);
+		if (func_call(arg, &argv[2], NULL, NULL, &res_tv) == OK)
+		    tv = &res_tv;
+		else
+		    tv = NULL;
+	    }
 
 	    if (argv[id_idx].v_type == VAR_NUMBER)
 	    {
@@ -1848,10 +1927,7 @@ may_invoke_callback(channel_T *channel, int part)
 
 	if (argv[0].v_type == VAR_STRING)
 	{
-	    char_u	*cmd = argv[0].vval.v_string;
-
 	    /* ["cmd", arg] or ["cmd", arg, arg] or ["cmd", arg, arg, arg] */
-	    ch_logs(channel, "Executing %s command", (char *)cmd);
 	    channel_exe_cmd(channel, part, argv);
 	    free_tv(listtv);
 	    return TRUE;
@@ -2274,7 +2350,7 @@ channel_read(channel_T *channel, int part, char *func)
 	    break;	/* error or nothing more to read */
 
 	/* Store the read message in the queue. */
-	channel_save(channel, part, buf, len);
+	channel_save(channel, part, buf, len, "RECV ");
 	readlen += len;
 	if (len < MAXMSGSIZE)
 	    break;	/* did read everything that's available */
@@ -2301,7 +2377,7 @@ channel_read(channel_T *channel, int part, char *func)
 	if (channel->ch_part[part].ch_mode == MODE_RAW
 				 || channel->ch_part[part].ch_mode == MODE_NL)
 	    channel_save(channel, part, (char_u *)DETACH_MSG_RAW,
-						 (int)STRLEN(DETACH_MSG_RAW));
+					 (int)STRLEN(DETACH_MSG_RAW), "PUT ");
 
 	/* TODO: When reading from stdout is not possible, should we try to
 	 * keep stdin and stderr open?  Probably not, assume the other side
@@ -2346,9 +2422,13 @@ channel_read_block(channel_T *channel, int part, int timeout)
 	    continue;
 
 	/* Wait for up to the channel timeout. */
-	if (fd == INVALID_FD
-		|| channel_wait(channel, fd, timeout) == FAIL)
+	if (fd == INVALID_FD)
 	    return NULL;
+	if (channel_wait(channel, fd, timeout) == FAIL)
+	{
+	    ch_log(channel, "Timed out");
+	    return NULL;
+	}
 	channel_read(channel, part, "channel_read_block");
     }
 
@@ -2388,16 +2468,18 @@ channel_read_block(channel_T *channel, int part, int timeout)
 channel_read_json_block(
 	channel_T   *channel,
 	int	    part,
-	int	    timeout,
+	int	    timeout_arg,
 	int	    id,
 	typval_T    **rettv)
 {
     int		more;
     sock_T	fd;
+    int		timeout;
+    chanpart_T	*chanpart = &channel->ch_part[part];
 
     ch_log(channel, "Reading JSON");
     if (id != -1)
-	channel->ch_part[part].ch_block_id = id;
+	chanpart->ch_block_id = id;
     for (;;)
     {
 	more = channel_parse_json(channel, part);
@@ -2405,7 +2487,7 @@ channel_read_json_block(
 	/* search for messsage "id" */
 	if (channel_get_json(channel, part, id, rettv) == OK)
 	{
-	    channel->ch_part[part].ch_block_id = 0;
+	    chanpart->ch_block_id = 0;
 	    return OK;
 	}
 
@@ -2416,14 +2498,50 @@ channel_read_json_block(
 	    if (channel_parse_messages())
 		continue;
 
-	    /* Wait for up to the timeout. */
-	    fd = channel->ch_part[part].ch_fd;
+	    /* Wait for up to the timeout.  If there was an incomplete message
+	     * use the deadline for that. */
+	    timeout = timeout_arg;
+	    if (chanpart->ch_waiting)
+	    {
+#ifdef WIN32
+		timeout = chanpart->ch_deadline - GetTickCount() + 1;
+#else
+		{
+		    struct timeval now_tv;
+
+		    gettimeofday(&now_tv, NULL);
+		    timeout = (chanpart->ch_deadline.tv_sec
+						       - now_tv.tv_sec) * 1000
+			+ (chanpart->ch_deadline.tv_usec
+						     - now_tv.tv_usec) / 1000
+			+ 1;
+		}
+#endif
+		if (timeout < 0)
+		{
+		    /* Something went wrong, channel_parse_json() didn't
+		     * discard message.  Cancel waiting. */
+		    chanpart->ch_waiting = FALSE;
+		    timeout = timeout_arg;
+		}
+		else if (timeout > timeout_arg)
+		    timeout = timeout_arg;
+	    }
+	    fd = chanpart->ch_fd;
 	    if (fd == INVALID_FD || channel_wait(channel, fd, timeout) == FAIL)
-		break;
-	    channel_read(channel, part, "channel_read_json_block");
+	    {
+		if (timeout == timeout_arg)
+		{
+		    if (fd != INVALID_FD)
+			ch_log(channel, "Timed out");
+		    break;
+		}
+	    }
+	    else
+		channel_read(channel, part, "channel_read_json_block");
 	}
     }
-    channel->ch_part[part].ch_block_id = 0;
+    chanpart->ch_block_id = 0;
     return FAIL;
 }
 

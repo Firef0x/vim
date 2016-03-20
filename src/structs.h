@@ -1357,6 +1357,14 @@ typedef struct {
     jsonq_T	ch_json_head;	/* header for circular json read queue */
     int		ch_block_id;	/* ID that channel_read_json_block() is
 				   waiting for */
+    /* When ch_waiting is TRUE use ch_deadline to wait for incomplete message
+     * to be complete. */
+    int		ch_waiting;
+#ifdef WIN32
+    DWORD	ch_deadline;
+#else
+    struct timeval ch_deadline;
+#endif
 
     cbq_T	ch_cb_head;	/* dummy node for per-request callbacks */
     char_u	*ch_callback;	/* call when a msg is not handled */
@@ -2200,7 +2208,7 @@ typedef struct w_line
 struct frame_S
 {
     char	fr_layout;	/* FR_LEAF, FR_COL or FR_ROW */
-#ifdef FEAT_VERTSPLIT
+#ifdef FEAT_WINDOWS
     int		fr_width;
     int		fr_newwidth;	/* new width used in win_equal_rec() */
 #endif
@@ -2370,8 +2378,6 @@ struct window_S
 				       status/command line(s) */
 #ifdef FEAT_WINDOWS
     int		w_status_height;    /* number of status lines (0 or 1) */
-#endif
-#ifdef FEAT_VERTSPLIT
     int		w_wincol;	    /* Leftmost column of window in screen.
 				       use W_WINCOL() */
     int		w_width;	    /* Width of window, excluding separation.
