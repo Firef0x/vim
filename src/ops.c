@@ -5714,7 +5714,7 @@ do_addsub(
 	if (buf1 == NULL)
 	    goto theend;
 	ptr = buf1;
-	if (negative && (!visual || (visual && was_positive)))
+	if (negative && (!visual || was_positive))
 	{
 	    *ptr++ = '-';
 	}

@@ -19764,7 +19764,7 @@ f_strcharpart(typval_T *argvars, typval_T *rettv)
 	if (nchar > 0)
 	    while (nchar > 0 && nbyte < slen)
 	    {
-		nbyte += mb_char2len(p[nbyte]);
+		nbyte += mb_cptr2len(p + nbyte);
 		--nchar;
 	    }
 	else
@@ -19774,7 +19774,12 @@ f_strcharpart(typval_T *argvars, typval_T *rettv)
 	    charlen = get_tv_number(&argvars[2]);
 	    while (charlen > 0 && nbyte + len < slen)
 	    {
-		len += mb_char2len(p[nbyte + len]);
+		int off = nbyte + len;
+
+		if (off < 0)
+		    len += 1;
+		else
+		    len += mb_cptr2len(p + off);
 		--charlen;
 	    }
 	}
@@ -20014,8 +20019,8 @@ f_synIDattr(typval_T *argvars UNUSED, typval_T *rettv)
     }
     else
     {
-#ifdef FEAT_GUI
-	if (gui.in_use)
+#if defined(FEAT_GUI) || defined(FEAT_TERMTRUECOLOR)
+	if (USE_24BIT)
 	    modec = 'g';
 	else
 #endif
