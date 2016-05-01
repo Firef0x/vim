@@ -2478,6 +2478,7 @@ channel_close(channel_T *channel, int invoke_close_cb)
 	   * first invoke the close callback.  Increment the refcount to avoid
 	   * the channel being freed halfway. */
 	  ++channel->ch_refcount;
+	  ch_log(channel, "Invoking callbacks before closing");
 	  for (part = PART_SOCK; part <= PART_ERR; ++part)
 	      while (may_invoke_callback(channel, part))
 		  ;
@@ -2594,7 +2595,7 @@ channel_free_all(void)
 #endif
 
 
-/* Sent when the channel is found closed when reading. */
+/* Sent when the netbeans channel is found closed when reading. */
 #define DETACH_MSG_RAW "DETACH\n"
 
 /* Buffer size for reading incoming messages. */
@@ -2765,7 +2766,7 @@ channel_wait(channel_T *channel, sock_T fd, int timeout)
 }
 
     static void
-channel_close_on_error(channel_T *channel, int part, char *func)
+channel_close_on_error(channel_T *channel, char *func)
 {
     /* Do not call emsg(), most likely the other end just exited. */
     ch_errors(channel, "%s(): Cannot read from channel", func);
@@ -2779,11 +2780,10 @@ channel_close_on_error(channel_T *channel, int part, char *func)
      *		-> ui_breakcheck
      *		    -> gui event loop or select loop
      *			-> channel_read()
-     * Don't send "DETACH" for a JS or JSON channel.
+     * Only send "DETACH" for a netbeans channel.
      */
-    if (channel->ch_part[part].ch_mode == MODE_RAW
-			     || channel->ch_part[part].ch_mode == MODE_NL)
-	channel_save(channel, part, (char_u *)DETACH_MSG_RAW,
+    if (channel->ch_nb_close_cb != NULL)
+	channel_save(channel, PART_OUT, (char_u *)DETACH_MSG_RAW,
 			      (int)STRLEN(DETACH_MSG_RAW), FALSE, "PUT ");
 
     /* When reading from stdout is not possible, assume the other side has
@@ -2846,7 +2846,7 @@ channel_read(channel_T *channel, int part, char *func)
 
     /* Reading a disconnection (readlen == 0), or an error. */
     if (readlen <= 0)
-	channel_close_on_error(channel, part, func);
+	channel_close_on_error(channel, func);
 
 #if defined(CH_HAS_GUI) && defined(FEAT_GUI_GTK)
     /* signal the main loop that there is something to read */
@@ -3118,8 +3118,7 @@ channel_handle_events(void)
 		if (r == CW_READY)
 		    channel_read(channel, part, "channel_handle_events");
 		else if (r == CW_ERROR)
-		    channel_close_on_error(channel, part,
-						   "channel_handle_events()");
+		    channel_close_on_error(channel, "channel_handle_events()");
 	    }
 	}
     }
@@ -3554,28 +3553,15 @@ set_ref_in_channel(int copyID)
 {
     int		abort = FALSE;
     channel_T	*channel;
-    int		part;
+    typval_T	tv;
 
     for (channel = first_channel; channel != NULL; channel = channel->ch_next)
-    {
-	for (part = PART_SOCK; part < PART_IN; ++part)
+	if (channel_still_useful(channel))
 	{
-	    jsonq_T *head = &channel->ch_part[part].ch_json_head;
-	    jsonq_T *item = head->jq_next;
-
-	    while (item != NULL)
-	    {
-		list_T	*l = item->jq_value->vval.v_list;
-
-		if (l->lv_copyID != copyID)
-		{
-		    l->lv_copyID = copyID;
-		    abort = abort || set_ref_in_list(l, copyID, NULL);
-		}
-		item = item->jq_next;
-	    }
+	    tv.v_type = VAR_CHANNEL;
+	    tv.vval.v_channel = channel;
+	    abort = abort || set_ref_in_item(&tv, copyID, NULL, NULL);
 	}
-    }
     return abort;
 }
 
@@ -4091,6 +4077,26 @@ job_still_useful(job_T *job)
 	       && (job->jv_stoponexit != NULL || job->jv_exit_cb != NULL
 		   || (job->jv_channel != NULL
 		       && channel_still_useful(job->jv_channel)));
+}
+
+/*
+ * Mark references in jobs that are still useful.
+ */
+    int
+set_ref_in_job(int copyID)
+{
+    int		abort = FALSE;
+    job_T	*job;
+    typval_T	tv;
+
+    for (job = first_job; job != NULL; job = job->jv_next)
+	if (job_still_useful(job))
+	{
+	    tv.v_type = VAR_JOB;
+	    tv.vval.v_job = job;
+	    abort = abort || set_ref_in_item(&tv, copyID, NULL, NULL);
+	}
+    return abort;
 }
 
     void
