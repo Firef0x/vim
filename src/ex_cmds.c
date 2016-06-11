@@ -2543,6 +2543,10 @@ barline_parse(vir_T *virp, char_u *text, bval_T *values)
     int	    count = 0;
     int	    i;
     int	    allocated = FALSE;
+#ifdef FEAT_MBYTE
+    char_u  *sconv;
+    int	    converted;
+#endif
 
     while (*p == ',')
     {
@@ -2560,7 +2564,8 @@ barline_parse(vir_T *virp, char_u *text, bval_T *values)
 	    if (!allocated)
 	    {
 		for (i = 0; i < count; ++i)
-		    if (values[i].bv_type == BVAL_STRING)
+		    if (values[i].bv_type == BVAL_STRING
+						   && !values[i].bv_allocated)
 		    {
 			values[i].bv_string = vim_strnsave(
 				       values[i].bv_string, values[i].bv_len);
@@ -2584,13 +2589,18 @@ barline_parse(vir_T *virp, char_u *text, bval_T *values)
 		++p;
 		len = getdigits(&p);
 		buf = alloc((int)(len + 1));
+		if (buf == NULL)
+		    return count;
 		p = buf;
 		for (todo = len; todo > 0; todo -= n)
 		{
 		    if (viminfo_readline(virp) || virp->vir_line[0] != '|'
 						  || virp->vir_line[1] != '<')
+		    {
 			/* file was truncated or garbled */
-			return 0;
+			vim_free(buf);
+			return count;
+		    }
 		    /* Get length of text, excluding |< and NL chars. */
 		    n = STRLEN(virp->vir_line);
 		    while (n > 0 && (virp->vir_line[n - 1] == NL
@@ -2618,7 +2628,7 @@ barline_parse(vir_T *virp, char_u *text, bval_T *values)
 		if (viminfo_readline(virp) || virp->vir_line[0] != '|'
 					      || virp->vir_line[1] != '<')
 		    /* file was truncated or garbled */
-		    return 0;
+		    return count;
 		p = virp->vir_line + 2;
 	    }
 	}
@@ -2654,12 +2664,33 @@ barline_parse(vir_T *virp, char_u *text, bval_T *values)
 	    }
 	    s[len] = NUL;
 
+#ifdef FEAT_MBYTE
+	    converted = FALSE;
+	    if (virp->vir_conv.vc_type != CONV_NONE && *s != NUL)
+	    {
+		sconv = string_convert(&virp->vir_conv, s, NULL);
+		if (sconv != NULL)
+		{
+		    if (s == buf)
+			vim_free(s);
+		    s = sconv;
+		    buf = s;
+		    converted = TRUE;
+		}
+	    }
+#endif
+	    /* Need to copy in allocated memory if the string wasn't allocated
+	     * above and we did allocate before, thus vir_line may change. */
 	    if (s != buf && allocated)
 		s = vim_strsave(s);
 	    values[count].bv_string = s;
 	    values[count].bv_type = BVAL_STRING;
 	    values[count].bv_len = len;
-	    values[count].bv_allocated = allocated;
+	    values[count].bv_allocated = allocated
+#ifdef FEAT_MBYTE
+					    || converted
+#endif
+						;
 	    ++count;
 	    if (nextp != NULL)
 	    {

@@ -179,3 +179,44 @@ func Test_cmdline_history_order()
 
   call delete('Xviminfo')
 endfunc
+
+func Test_viminfo_encoding()
+  if !has('multi_byte')
+    return
+  endif
+  set enc=latin1
+  call histdel(':')
+  call histadd(':', "echo '\xe9'")
+  wviminfo Xviminfo
+
+  set fencs=utf-8,latin1
+  set enc=utf-8
+  sp Xviminfo
+  call assert_equal('latin1', &fenc)
+  close
+  
+  call histdel(':')
+  rviminfo Xviminfo
+  call assert_equal("echo 'é'", histget(':', -1))
+
+  call delete('Xviminfo')
+endfunc
+
+func Test_viminfo_bad_syntax()
+  let lines = []
+  call add(lines, '|<')  " empty continuation line
+  call add(lines, '|234234234234234324,nothing')
+  call add(lines, '|1+"no comma"')
+  call add(lines, '|1,2,3,4,5,6,7')  " too many items
+  call add(lines, '|1,"string version"')
+  call add(lines, '|1,>x') " bad continuation line
+  call add(lines, '|1,"x') " missing quote
+  call add(lines, '|1,"x\') " trailing backslash
+  call add(lines, '|1,,,,') "trailing comma
+  call add(lines, '|1,>234') " trailing continuation line
+  call writefile(lines, 'Xviminfo')
+  call assert_fails('rviminfo Xviminfo', 'E685:')
+
+  call delete('Xviminfo')
+endfunc
+
