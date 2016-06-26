@@ -2031,6 +2031,7 @@ test_arglist \
 	test_help_tagjump \
 	test_history \
 	test_increment \
+	test_increment_dbcs \
 	test_join \
 	test_json \
 	test_langmap \
@@ -2044,6 +2045,7 @@ test_arglist \
 	test_packadd \
 	test_partial \
 	test_perl \
+	test_popup \
 	test_quickfix \
 	test_regexp_latin \
 	test_regexp_utf8 \
