@@ -120,7 +120,6 @@ static void	qf_new_list(qf_info_T *qi, char_u *qf_title);
 static void	ll_free_all(qf_info_T **pqi);
 static int	qf_add_entry(qf_info_T *qi, char_u *dir, char_u *fname, int bufnum, char_u *mesg, long lnum, int col, int vis_col, char_u *pattern, int nr, int type, int valid);
 static qf_info_T *ll_new_list(void);
-static void	qf_msg(qf_info_T *qi);
 static void	qf_free(qf_info_T *qi, int idx);
 static char_u	*qf_types(int, int);
 static int	qf_get_fnum(qf_info_T *qi, char_u *, char_u *);
@@ -792,7 +791,7 @@ qf_init_ext(
     int		    errmsglen;
     char_u	    *pattern;
     qfstate_T	    state = {NULL, 0, NULL, 0, NULL, NULL, NULL, NULL,
-			     NULL, lnumfirst, lnumlast};
+			     NULL, 0, 0};
     int		    col = 0;
     char_u	    use_viscol = FALSE;
     int		    type = 0;
@@ -903,6 +902,8 @@ qf_init_ext(
 	state.tv = tv;
     }
     state.buf = buf;
+    state.buflnum = lnumfirst;
+    state.lnumlast = lnumlast;
 
     /*
      * Read the lines in the error file one by one.
@@ -1580,7 +1581,7 @@ static char_u *qf_last_bufname = NULL;
 static bufref_T  qf_last_bufref = {NULL, 0};
 
 /*
- * Get buffer number for file "dir.name".
+ * Get buffer number for file "directory.fname".
  * Also sets the b_has_qf_entry flag.
  */
     static int
@@ -2542,6 +2543,29 @@ qf_fmt_text(char_u *text, char_u *buf, int bufsize)
     buf[i] = NUL;
 }
 
+    static void
+qf_msg(qf_info_T *qi, int which, char *lead)
+{
+    char   *title = (char *)qi->qf_lists[which].qf_title;
+    int    count = qi->qf_lists[which].qf_count;
+    char_u buf[IOSIZE];
+
+    vim_snprintf((char *)buf, IOSIZE, _("%serror list %d of %d; %d errors "),
+	    lead,
+	    which + 1,
+	    qi->qf_listcount,
+	    count);
+
+    if (title != NULL)
+    {
+	while (STRLEN(buf) < 34)
+	    STRCAT(buf, " ");
+	STRCAT(buf, title);
+    }
+    trunc_string(buf, buf, Columns - 1, IOSIZE);
+    msg(buf);
+}
+
 /*
  * ":colder [count]": Up in the quickfix stack.
  * ":cnewer [count]": Down in the quickfix stack.
@@ -2589,18 +2613,26 @@ qf_age(exarg_T *eap)
 	    ++qi->qf_curlist;
 	}
     }
-    qf_msg(qi);
-}
-
-    static void
-qf_msg(qf_info_T *qi)
-{
-    smsg((char_u *)_("error list %d of %d; %d errors"),
-	    qi->qf_curlist + 1, qi->qf_listcount,
-	    qi->qf_lists[qi->qf_curlist].qf_count);
+    qf_msg(qi, qi->qf_curlist, "");
 #ifdef FEAT_WINDOWS
     qf_update_buffer(qi, NULL);
 #endif
+}
+
+    void
+qf_history(exarg_T *eap)
+{
+    qf_info_T	*qi = &ql_info;
+    int		i;
+
+    if (eap->cmdidx == CMD_lhistory)
+	qi = GET_LOC_LIST(curwin);
+    if (qi == NULL || (qi->qf_listcount == 0
+				&& qi->qf_lists[qi->qf_curlist].qf_count == 0))
+	MSG(_("No entries"));
+    else
+	for (i = 0; i < qi->qf_listcount; ++i)
+	    qf_msg(qi, i, i == qi->qf_curlist ? "> " : "  ");
 }
 
 /*
@@ -4077,11 +4109,13 @@ ex_vimgrep(exarg_T *eap)
 		while (vim_regexec_multi(&regmatch, curwin, buf, lnum,
 							       col, NULL) > 0)
 		{
-		    ;
+		    /* Pass the buffer number so that it gets used even for a
+		     * dummy buffer, unless duplicate_name is set, then the
+		     * buffer will be wiped out below. */
 		    if (qf_add_entry(qi,
 				NULL,       /* dir */
 				fname,
-				0,
+				duplicate_name ? 0 : buf->b_fnum,
 				ml_get_buf(buf,
 				     regmatch.startpos[0].lnum + lnum, FALSE),
 				regmatch.startpos[0].lnum + lnum,
@@ -4145,12 +4179,17 @@ ex_vimgrep(exarg_T *eap)
 		    else if (buf != first_match_buf || (flags & VGR_NOJUMP))
 		    {
 			unload_dummy_buffer(buf, dirname_start);
+			/* Keeping the buffer, remove the dummy flag. */
+			buf->b_flags &= ~BF_DUMMY;
 			buf = NULL;
 		    }
 		}
 
 		if (buf != NULL)
 		{
+		    /* Keeping the buffer, remove the dummy flag. */
+		    buf->b_flags &= ~BF_DUMMY;
+
 		    /* If the buffer is still loaded we need to use the
 		     * directory we jumped to below. */
 		    if (buf == first_match_buf
