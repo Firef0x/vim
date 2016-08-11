@@ -2109,7 +2109,7 @@ typedef enum
  * been seen at that stage.  But it must be before globals.h, where error_ga
  * is declared. */
 #if !defined(FEAT_GUI_W32) && !defined(FEAT_GUI_X11) \
-	&& !defined(FEAT_GUI_GTK) && !defined(FEAT_GUI_MAC)
+	&& !defined(FEAT_GUI_GTK) && !defined(FEAT_GUI_MAC) && !defined(PROTO)
 # define mch_errmsg(str)	fprintf(stderr, "%s", (str))
 # define display_errors()	fflush(stderr)
 # define mch_msg(str)		printf("%s", (str))
@@ -2439,9 +2439,6 @@ typedef enum
 /* Options for json_encode() and json_decode. */
 #define JSON_JS		1   /* use JS instead of JSON */
 #define JSON_NO_NONE	2   /* v:none item not allowed */
-
-/* This is in main.c, cproto can't handle it. */
-int vim_main2(void);
 
 /* Used for flags of do_in_path() */
 #define DIP_ALL	    0x01	/* all matches, not just the first one */
