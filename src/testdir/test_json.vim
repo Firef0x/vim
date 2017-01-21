@@ -1,12 +1,9 @@
 " Test for JSON functions.
 
-" JSON requires using utf-8.  Conversion breaks the asserts, therefore set
-" 'encoding' to utf-8.
+" JSON requires using utf-8, because conversion breaks the asserts.
 if !has('multi_byte')
   finish
 endif
-set encoding=utf-8
-scriptencoding utf-8
 
 let s:json1 = '"str\"in\\g"'
 let s:var1 = "str\"in\\g"
@@ -148,11 +145,14 @@ func Test_json_decode()
   call assert_equal("", json_decode('""'))
 
   call assert_equal({'n': 1}, json_decode('{"n":1,}'))
+  call assert_fails("call json_decode(\"{'n':'1',}\")", 'E474:')
+  call assert_fails("call json_decode(\"'n'\")", 'E474:')
 
   call assert_fails('call json_decode("\"")', "E474:")
   call assert_fails('call json_decode("blah")', "E474:")
-  call assert_fails('call json_decode("true blah")', "E474:")
+  call assert_fails('call json_decode("true blah")', "E488:")
   call assert_fails('call json_decode("<foobar>")', "E474:")
+  call assert_fails('call json_decode("{\"a\":1,\"a\":2}")', "E938:")
 
   call assert_fails('call json_decode("{")', "E474:")
   call assert_fails('call json_decode("{foobar}")', "E474:")
@@ -257,8 +257,11 @@ func Test_js_decode()
   call assert_equal(v:none, js_decode(''))
   call assert_equal(type(v:none), type(js_decode('')))
   call assert_equal("", js_decode('""'))
+  call assert_equal("", js_decode("''"))
 
+  call assert_equal('n', js_decode("'n'"))
   call assert_equal({'n': 1}, js_decode('{"n":1,}'))
+  call assert_equal({'n': '1'}, js_decode("{'n':'1',}"))
 
   call assert_fails('call js_decode("\"")', "E474:")
   call assert_fails('call js_decode("blah")', "E474:")

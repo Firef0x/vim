@@ -1,4 +1,4 @@
-/* vi:set ts=8 sts=4 sw=4:
+/* vi:set ts=8 sts=4 sw=4 noet:
  *
  * VIM - Vi IMproved	by Bram Moolenaar
  *
@@ -137,6 +137,9 @@ _RTLENTRYF
 #endif
 sort_func_compare(const void *s1, const void *s2);
 #endif
+#ifdef FEAT_SEARCH_EXTRA
+static void set_search_match(pos_T *t);
+#endif
 
 /*
  * getcmdline() - accept a command line starting with firstc.
@@ -174,14 +177,22 @@ getcmdline(
     int		histype;		/* history type to be used */
 #endif
 #ifdef FEAT_SEARCH_EXTRA
-    pos_T	old_cursor;
+    pos_T	search_start;		/* where 'incsearch' starts searching */
+    pos_T       save_cursor;
     colnr_T	old_curswant;
+    colnr_T     init_curswant = curwin->w_curswant;
     colnr_T	old_leftcol;
+    colnr_T     init_leftcol = curwin->w_leftcol;
     linenr_T	old_topline;
+    linenr_T    init_topline = curwin->w_topline;
+    pos_T       match_start = curwin->w_cursor;
+    pos_T       match_end;
 # ifdef FEAT_DIFF
     int		old_topfill;
+    int         init_topfill = curwin->w_topfill;
 # endif
     linenr_T	old_botline;
+    linenr_T	init_botline = curwin->w_botline;
     int		did_incsearch = FALSE;
     int		incsearch_postponed = FALSE;
 #endif
@@ -201,7 +212,8 @@ getcmdline(
 #endif
     expand_T	xpc;
     long	*b_im_ptr = NULL;
-#if defined(FEAT_WILDMENU) || defined(FEAT_EVAL) || defined(FEAT_SEARCH_EXTRA)
+#if defined(FEAT_WILDMENU) || defined(FEAT_EVAL) \
+    || defined(FEAT_SEARCH_EXTRA) || defined(FEAT_CMDWIN)
     /* Everything that may work recursively should save and restore the
      * current command line in save_ccline.  That includes update_screen(), a
      * custom status line may invoke ":normal". */
@@ -223,7 +235,9 @@ getcmdline(
 
     ccline.overstrike = FALSE;		    /* always start in insert mode */
 #ifdef FEAT_SEARCH_EXTRA
-    old_cursor = curwin->w_cursor;	    /* needs to be restored later */
+    clearpos(&match_end);
+    save_cursor = curwin->w_cursor;	    /* may be restored later */
+    search_start = curwin->w_cursor;
     old_curswant = curwin->w_curswant;
     old_leftcol = curwin->w_leftcol;
     old_topline = curwin->w_topline;
@@ -996,6 +1010,21 @@ getcmdline(
 
 		    /* Truncate at the end, required for multi-byte chars. */
 		    ccline.cmdbuff[ccline.cmdlen] = NUL;
+#ifdef FEAT_SEARCH_EXTRA
+		    if (ccline.cmdlen == 0)
+		    {
+			search_start = save_cursor;
+			/* save view settings, so that the screen
+			 * won't be restored at the wrong position */
+			old_curswant = init_curswant;
+			old_leftcol = init_leftcol;
+			old_topline = init_topline;
+# ifdef FEAT_DIFF
+			old_topfill = init_topfill;
+# endif
+			old_botline = init_botline;
+		    }
+#endif
 		    redrawcmd();
 		}
 		else if (ccline.cmdlen == 0 && c != Ctrl_W
@@ -1021,6 +1050,10 @@ getcmdline(
 			    msg_col = 0;
 			msg_putchar(' ');		/* delete ':' */
 		    }
+#ifdef FEAT_SEARCH_EXTRA
+		    if (ccline.cmdlen == 0)
+			search_start = save_cursor;
+#endif
 		    redraw_cmdline = TRUE;
 		    goto returncmd;		/* back to cmd mode */
 		}
@@ -1104,6 +1137,10 @@ getcmdline(
 		    ccline.cmdbuff[i++] = ccline.cmdbuff[j++];
 		/* Truncate at the end, required for multi-byte chars. */
 		ccline.cmdbuff[ccline.cmdlen] = NUL;
+#ifdef FEAT_SEARCH_EXTRA
+		if (ccline.cmdlen == 0)
+		    search_start = save_cursor;
+#endif
 		redrawcmd();
 		goto cmdline_changed;
 
@@ -1440,26 +1477,31 @@ getcmdline(
 		if (p_is && !cmd_silent && (firstc == '/' || firstc == '?'))
 		{
 		    /* Add a character from under the cursor for 'incsearch' */
-		    if (did_incsearch
-				   && !equalpos(curwin->w_cursor, old_cursor))
+		    if (did_incsearch)
 		    {
-			c = gchar_cursor();
-			/* If 'ignorecase' and 'smartcase' are set and the
-			* command line has no uppercase characters, convert
-			* the character to lowercase */
-			if (p_ic && p_scs && !pat_has_uppercase(ccline.cmdbuff))
-			    c = MB_TOLOWER(c);
-			if (c != NUL)
+			curwin->w_cursor = match_end;
+			if (!equalpos(curwin->w_cursor, search_start))
 			{
-			    if (c == firstc || vim_strchr((char_u *)(
-					    p_magic ? "\\^$.*[" : "\\^$"), c)
-								      != NULL)
+			    c = gchar_cursor();
+			    /* If 'ignorecase' and 'smartcase' are set and the
+			    * command line has no uppercase characters, convert
+			    * the character to lowercase */
+			    if (p_ic && p_scs
+					 && !pat_has_uppercase(ccline.cmdbuff))
+				c = MB_TOLOWER(c);
+			    if (c != NUL)
 			    {
-				/* put a backslash before special characters */
-				stuffcharReadbuff(c);
-				c = '\\';
+				if (c == firstc || vim_strchr((char_u *)(
+					      p_magic ? "\\^$.*[" : "\\^$"), c)
+								       != NULL)
+				{
+				    /* put a backslash before special
+				     * characters */
+				    stuffcharReadbuff(c);
+				    c = '\\';
+				}
+				break;
 			    }
-			    break;
 			}
 		    }
 		    goto cmdline_not_changed;
@@ -1478,8 +1520,9 @@ getcmdline(
 		    if (nextwild(&xpc, (c == Ctrl_P) ? WILD_PREV : WILD_NEXT,
 						    0, firstc != '@') == FAIL)
 			break;
-		    goto cmdline_changed;
+		    goto cmdline_not_changed;
 		}
+		/* FALLTHROUGH */
 
 #ifdef FEAT_CMDHIST
 	case K_UP:
@@ -1623,7 +1666,79 @@ getcmdline(
 		    goto cmdline_changed;
 		}
 		beep_flush();
+#endif
 		goto cmdline_not_changed;
+
+#ifdef FEAT_SEARCH_EXTRA
+	case Ctrl_G:	    /* next match */
+	case Ctrl_T:	    /* previous match */
+		if (p_is && !cmd_silent && (firstc == '/' || firstc == '?'))
+		{
+		    pos_T  t;
+		    int    search_flags = SEARCH_KEEP + SEARCH_NOOF
+							     + SEARCH_PEEK;
+
+		    if (char_avail())
+			continue;
+		    cursor_off();
+		    out_flush();
+		    if (c == Ctrl_G)
+		    {
+			t = match_end;
+			search_flags += SEARCH_COL;
+		    }
+		    else
+			t = match_start;
+		    ++emsg_off;
+		    i = searchit(curwin, curbuf, &t,
+				 c == Ctrl_G ? FORWARD : BACKWARD,
+				 ccline.cmdbuff, count, search_flags,
+				 RE_SEARCH, 0, NULL);
+		    --emsg_off;
+		    if (i)
+		    {
+			search_start = match_start;
+			match_end = t;
+			match_start = t;
+			if (c == Ctrl_T && firstc == '/')
+			{
+			    /* move just before the current match, so that
+			     * when nv_search finishes the cursor will be
+			     * put back on the match */
+			    search_start = t;
+			    (void)decl(&search_start);
+			}
+			if (lt(t, search_start) && c == Ctrl_G)
+			{
+			    /* wrap around */
+			    search_start = t;
+			    if (firstc == '?')
+				(void)incl(&search_start);
+			    else
+				(void)decl(&search_start);
+			}
+
+			set_search_match(&match_end);
+			curwin->w_cursor = match_start;
+			changed_cline_bef_curs();
+			update_topline();
+			validate_cursor();
+			highlight_match = TRUE;
+			old_curswant = curwin->w_curswant;
+			old_leftcol = curwin->w_leftcol;
+			old_topline = curwin->w_topline;
+# ifdef FEAT_DIFF
+			old_topfill = curwin->w_topfill;
+# endif
+			old_botline = curwin->w_botline;
+			update_screen(NOT_VALID);
+			redrawcmdline();
+		    }
+		    else
+			vim_beep(BO_ERROR);
+		    goto cmdline_not_changed;
+		}
+		break;
 #endif
 
 	case Ctrl_V:
@@ -1666,7 +1781,7 @@ getcmdline(
 	case Ctrl__:	    /* CTRL-_: switch language mode */
 		if (!p_ari)
 		    break;
-#ifdef FEAT_FKMAP
+# ifdef FEAT_FKMAP
 		if (p_altkeymap)
 		{
 		    cmd_fkmap = !cmd_fkmap;
@@ -1674,7 +1789,7 @@ getcmdline(
 			ccline.overstrike = FALSE;
 		}
 		else			    /* Hebrew is default */
-#endif
+# endif
 		    cmd_hkmap = !cmd_hkmap;
 		goto cmdline_not_changed;
 #endif
@@ -1767,7 +1882,7 @@ cmdline_changed:
 		continue;
 	    }
 	    incsearch_postponed = FALSE;
-	    curwin->w_cursor = old_cursor;  /* start at old position */
+	    curwin->w_cursor = search_start;  /* start at old position */
 
 	    /* If there is no command line, don't do anything */
 	    if (ccline.cmdlen == 0)
@@ -1821,19 +1936,11 @@ cmdline_changed:
 	    {
 		pos_T	    save_pos = curwin->w_cursor;
 
-		/*
-		 * First move cursor to end of match, then to the start.  This
-		 * moves the whole match onto the screen when 'nowrap' is set.
-		 */
-		curwin->w_cursor.lnum += search_match_lines;
-		curwin->w_cursor.col = search_match_endcol;
-		if (curwin->w_cursor.lnum > curbuf->b_ml.ml_line_count)
-		{
-		    curwin->w_cursor.lnum = curbuf->b_ml.ml_line_count;
-		    coladvance((colnr_T)MAXCOL);
-		}
+		match_start = curwin->w_cursor;
+		set_search_match(&curwin->w_cursor);
 		validate_cursor();
 		end_pos = curwin->w_cursor;
+		match_end = end_pos;
 		curwin->w_cursor = save_pos;
 	    }
 	    else
@@ -1893,7 +2000,18 @@ returncmd:
 #ifdef FEAT_SEARCH_EXTRA
     if (did_incsearch)
     {
-	curwin->w_cursor = old_cursor;
+	if (gotesc)
+	    curwin->w_cursor = save_cursor;
+	else
+	{
+	    if (!equalpos(save_cursor, search_start))
+	    {
+		/* put the '" mark at the original position */
+		curwin->w_cursor = save_cursor;
+		setpcmark();
+	    }
+	    curwin->w_cursor = search_start;
+	}
 	curwin->w_curswant = old_curswant;
 	curwin->w_leftcol = old_leftcol;
 	curwin->w_topline = old_topline;
@@ -2037,12 +2155,17 @@ text_locked(void)
     void
 text_locked_msg(void)
 {
+    EMSG(_(get_text_locked_msg()));
+}
+
+    char_u *
+get_text_locked_msg(void)
+{
 #ifdef FEAT_CMDWIN
     if (cmdwin_type != 0)
-	EMSG(_(e_cmdwin));
-    else
+	return e_cmdwin;
 #endif
-	EMSG(_(e_secure));
+    return e_secure;
 }
 
 #if defined(FEAT_AUTOCMD) || defined(PROTO)
@@ -4387,7 +4510,7 @@ set_expand_context(expand_T *xp)
 	xp->xp_context = EXPAND_NOTHING;
 	return;
     }
-    set_cmd_context(xp, ccline.cmdbuff, ccline.cmdlen, ccline.cmdpos);
+    set_cmd_context(xp, ccline.cmdbuff, ccline.cmdlen, ccline.cmdpos, TRUE);
 }
 
     void
@@ -4395,7 +4518,8 @@ set_cmd_context(
     expand_T	*xp,
     char_u	*str,	    /* start of command line */
     int		len,	    /* length of command line (excl. NUL) */
-    int		col)	    /* position of cursor */
+    int		col,	    /* position of cursor */
+    int		use_ccline UNUSED) /* use ccline for info */
 {
     int		old_char = NUL;
     char_u	*nextcomm;
@@ -4410,14 +4534,14 @@ set_cmd_context(
     nextcomm = str;
 
 #ifdef FEAT_EVAL
-    if (ccline.cmdfirstc == '=')
+    if (use_ccline && ccline.cmdfirstc == '=')
     {
 # ifdef FEAT_CMDL_COMPL
 	/* pass CMD_SIZE because there is no real command */
 	set_context_for_expression(xp, str, CMD_SIZE);
 # endif
     }
-    else if (ccline.input_fn)
+    else if (use_ccline && ccline.input_fn)
     {
 	xp->xp_context = ccline.xp_context;
 	xp->xp_pattern = ccline.cmdbuff;
@@ -4709,6 +4833,7 @@ ExpandFromContext(
 	{
 	    {EXPAND_COMMANDS, get_command_name, FALSE, TRUE},
 	    {EXPAND_BEHAVE, get_behave_arg, TRUE, TRUE},
+	    {EXPAND_MESSAGES, get_messages_arg, TRUE, TRUE},
 #ifdef FEAT_CMDHIST
 	    {EXPAND_HISTORY, get_history_arg, TRUE, TRUE},
 #endif
@@ -5408,20 +5533,6 @@ static char *(history_names[]) =
     NULL
 };
 
-/*
- * Return the current time in seconds.  Calls time(), unless test_settime()
- * was used.
- */
-    static time_t
-vim_time(void)
-{
-#ifdef FEAT_EVAL
-    return time_for_testing == 0 ? time(NULL) : time_for_testing;
-#else
-    return time(NULL);
-#endif
-}
-
 #if defined(FEAT_CMDL_COMPL) || defined(PROTO)
 /*
  * Function given to ExpandGeneric() to obtain the possible first
@@ -5653,7 +5764,7 @@ add_to_history(
      */
     if (histype == HIST_SEARCH && in_map)
     {
-	if (maptick == last_maptick)
+	if (maptick == last_maptick && hisidx[HIST_SEARCH] >= 0)
 	{
 	    /* Current line is from the same mapping, remove it */
 	    hisptr = &history[HIST_SEARCH][hisidx[HIST_SEARCH]];
@@ -6019,7 +6130,7 @@ get_list_range(char_u **str, int *num1, int *num2)
 {
     int		len;
     int		first = FALSE;
-    long	num;
+    varnumber_T	num;
 
     *str = skipwhite(*str);
     if (**str == '-' || vim_isdigit(**str))  /* parse "from" part of range */
@@ -6280,34 +6391,34 @@ read_viminfo_history(vir_T *virp, int writing)
  */
     void
 handle_viminfo_history(
-	bval_T	*values,
-	int	count,
-	int	writing)
+	garray_T    *values,
+	int	    writing)
 {
     int		type;
     long_u	len;
     char_u	*val;
     char_u	*p;
+    bval_T	*vp = (bval_T *)values->ga_data;
 
     /* Check the format:
      * |{bartype},{histtype},{timestamp},{separator},"text" */
-    if (count < 4
-	    || values[0].bv_type != BVAL_NR
-	    || values[1].bv_type != BVAL_NR
-	    || (values[2].bv_type != BVAL_NR && values[2].bv_type != BVAL_EMPTY)
-	    || values[3].bv_type != BVAL_STRING)
+    if (values->ga_len < 4
+	    || vp[0].bv_type != BVAL_NR
+	    || vp[1].bv_type != BVAL_NR
+	    || (vp[2].bv_type != BVAL_NR && vp[2].bv_type != BVAL_EMPTY)
+	    || vp[3].bv_type != BVAL_STRING)
 	return;
 
-    type = values[0].bv_nr;
+    type = vp[0].bv_nr;
     if (type >= HIST_COUNT)
 	return;
     if (viminfo_hisidx[type] < viminfo_hislen[type])
     {
-	val = values[3].bv_string;
+	val = vp[3].bv_string;
 	if (val != NULL && *val != NUL)
 	{
-	    int sep = type == HIST_SEARCH && values[2].bv_type == BVAL_NR
-						      ? values[2].bv_nr : NUL;
+	    int sep = type == HIST_SEARCH && vp[2].bv_type == BVAL_NR
+						      ? vp[2].bv_nr : NUL;
 	    int idx;
 	    int overwrite = FALSE;
 
@@ -6329,12 +6440,14 @@ handle_viminfo_history(
 		if (!overwrite)
 		{
 		    /* Need to re-allocate to append the separator byte. */
-		    len = values[3].bv_len;
+		    len = vp[3].bv_len;
 		    p = lalloc(len + 2, TRUE);
 		}
+		else
+		    len = 0; /* for picky compilers */
 		if (p != NULL)
 		{
-		    viminfo_history[type][idx].time_set = values[1].bv_nr;
+		    viminfo_history[type][idx].time_set = vp[1].bv_nr;
 		    if (!overwrite)
 		    {
 			mch_memmove(p, val, (size_t)len + 1);
@@ -6462,7 +6575,7 @@ merge_history(int type)
 	else
 	    clear_hist_entry(&new_hist[i]);
     }
-    hisidx[type] = len - 1;
+    hisidx[type] = (i < len ? i : len) - 1;
 
     /* Free what is not kept. */
     for (i = 0; i < viminfo_hisidx[type]; i++)
@@ -6471,6 +6584,7 @@ merge_history(int type)
 	vim_free(history[type][i].hisstr);
     vim_free(history[type]);
     history[type] = new_hist;
+    vim_free(tot_hist);
 }
 
 /*
@@ -6666,9 +6780,9 @@ cmd_gchar(int offset)
 ex_window(void)
 {
     struct cmdline_info	save_ccline;
-    buf_T		*old_curbuf = curbuf;
+    bufref_T		old_curbuf;
     win_T		*old_curwin = curwin;
-    buf_T		*bp;
+    bufref_T		bufref;
     win_T		*wp;
     int			i;
     linenr_T		lnum;
@@ -6697,6 +6811,7 @@ ex_window(void)
 	beep_flush();
 	return K_IGNORE;
     }
+    set_bufref(&old_curbuf, curbuf);
 
     /* Save current window sizes. */
     win_size_save(&winsizes);
@@ -6787,9 +6902,7 @@ ex_window(void)
     redraw_later(SOME_VALID);
 
     /* Save the command line info, can be used recursively. */
-    save_ccline = ccline;
-    ccline.cmdbuff = NULL;
-    ccline.cmdprompt = NULL;
+    save_cmdline(&save_ccline);
 
     /* No Ex mode here! */
     exmode_active = 0;
@@ -6836,14 +6949,14 @@ ex_window(void)
 # endif
 
     /* Restore the command line info. */
-    ccline = save_ccline;
+    restore_cmdline(&save_ccline);
     cmdwin_type = 0;
 
     exmode_active = save_exmode;
 
     /* Safety check: The old window or buffer was deleted: It's a bug when
      * this happens! */
-    if (!win_valid(old_curwin) || !buf_valid(old_curbuf))
+    if (!win_valid(old_curwin) || !bufref_valid(&old_curbuf))
     {
 	cmdwin_result = Ctrl_C;
 	EMSG(_("E199: Active window or buffer deleted"));
@@ -6914,14 +7027,14 @@ ex_window(void)
 	curwin->w_p_cole = 0;
 # endif
 	wp = curwin;
-	bp = curbuf;
+	set_bufref(&bufref, curbuf);
 	win_goto(old_curwin);
 	win_close(wp, TRUE);
 
 	/* win_close() may have already wiped the buffer when 'bh' is
 	 * set to 'wipe' */
-	if (buf_valid(bp))
-	    close_buffer(NULL, bp, DOBUF_WIPE, FALSE);
+	if (bufref_valid(&bufref))
+	    close_buffer(NULL, bufref.br_buf, DOBUF_WIPE, FALSE);
 
 	/* Restore window sizes. */
 	win_size_restore(&winsizes);
@@ -6993,3 +7106,21 @@ script_get(exarg_T *eap, char_u *cmd)
 
     return (char_u *)ga.ga_data;
 }
+
+#ifdef FEAT_SEARCH_EXTRA
+    static void
+set_search_match(pos_T *t)
+{
+    /*
+    * First move cursor to end of match, then to the start.  This
+    * moves the whole match onto the screen when 'nowrap' is set.
+    */
+    t->lnum += search_match_lines;
+    t->col = search_match_endcol;
+    if (t->lnum > curbuf->b_ml.ml_line_count)
+    {
+	t->lnum = curbuf->b_ml.ml_line_count;
+	coladvance((colnr_T)MAXCOL);
+    }
+}
+#endif

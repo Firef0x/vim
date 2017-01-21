@@ -1,4 +1,4 @@
-/* vi:set ts=8 sts=4 sw=4:
+/* vi:set ts=8 sts=4 sw=4 noet:
  *
  * VIM - Vi IMproved	by Bram Moolenaar
  *
@@ -1153,10 +1153,9 @@ install_vimrc(int idx)
 		    fprintf(fd, "set compatible\n");
 		    break;
 	case compat_some_enhancements:
-		    fprintf(fd, "set nocompatible\n");
+		    fprintf(fd, "source $VIMRUNTIME/defaults.vim\n");
 		    break;
 	case compat_all_enhancements:
-		    fprintf(fd, "set nocompatible\n");
 		    fprintf(fd, "source $VIMRUNTIME/vimrc_example.vim\n");
 		    break;
     }

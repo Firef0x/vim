@@ -1,6 +1,6 @@
 /*
- * config.h.in.  Generated automatically from configure.in by autoheader, and
- * manually changed after that.
+ * config.h.in.  Originally generated automatically from configure.ac by
+ * autoheader and manually changed after that.
  */
 
 /* Define if we have EBCDIC code */
@@ -154,7 +154,6 @@
 #undef BAD_GETCWD
 
 /* Define if you the function: */
-#undef HAVE_BCMP
 #undef HAVE_FCHDIR
 #undef HAVE_FCHOWN
 #undef HAVE_FSEEKO
@@ -170,7 +169,6 @@
 #undef HAVE_ICONV
 #undef HAVE_NL_LANGINFO_CODESET
 #undef HAVE_LSTAT
-#undef HAVE_MEMCMP
 #undef HAVE_MEMSET
 #undef HAVE_MKDTEMP
 #undef HAVE_NANOSLEEP
@@ -190,6 +188,7 @@
 #undef HAVE_SIGSET
 #undef HAVE_SIGSETJMP
 #undef HAVE_SIGSTACK
+#undef HAVE_SIGPROCMASK
 #undef HAVE_SIGVEC
 #undef HAVE_SMACK
 #undef HAVE_STRCASECMP

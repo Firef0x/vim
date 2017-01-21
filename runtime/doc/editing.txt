@@ -1,4 +1,4 @@
-*editing.txt*   For Vim version 7.4.  Last change: 2016 Mar 28
+*editing.txt*   For Vim version 8.0.  Last change: 2016 Nov 24
 
 
 		  VIM REFERENCE MANUAL    by Bram Moolenaar
@@ -181,7 +181,8 @@ start editing another file, Vim will refuse this.  In order to overrule this
 protection, add a '!' to the command.  The changes will then be lost.  For
 example: ":q" will not work if the buffer was changed, but ":q!" will.  To see
 whether the buffer was changed use the "CTRL-G" command.  The message includes
-the string "[Modified]" if the buffer has been changed.
+the string "[Modified]" if the buffer has been changed, or "+" if the 'm' flag
+is in 'shortmess'.
 
 If you want to automatically save the changes without asking, switch on the
 'autowriteall' option.  'autowrite' is the associated Vi-compatible option
@@ -976,12 +977,12 @@ WRITING WITH MULTIPLE BUFFERS				*buffer-write*
 
 							*:wa* *:wall*
 :wa[ll]			Write all changed buffers.  Buffers without a file
-			name or which are readonly are not written. {not in
-			Vi}
+			name cause an error message.  Buffers which are
+			readonly are not written. {not in Vi}
 
 :wa[ll]!		Write all changed buffers, even the ones that are
 			readonly.  Buffers without a file name are not
-			written. {not in Vi}
+			written and cause an error message. {not in Vi}
 
 
 Vim will warn you if you try to overwrite a file that has been changed
@@ -1114,10 +1115,12 @@ The names can be in upper- or lowercase.
 			edited.  See |:confirm| and 'confirm'.  {not in Vi}
 
 :q[uit]!		Quit without writing, also when the current buffer has
-			changes.  If this is the last window and there is a
-			modified hidden buffer, the current buffer is
-			abandoned and the first changed hidden buffer becomes
-			the current buffer.
+			changes.  The buffer is unloaded, also when it has
+			'hidden' set.
+			If this is the last window and there is a modified
+			hidden buffer, the current buffer is abandoned and the
+			first changed hidden buffer becomes the current
+			buffer.
 			Use ":qall!" to exit always.
 
 :cq[uit]		Quit always, without writing, and return an error

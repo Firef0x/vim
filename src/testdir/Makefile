@@ -80,14 +80,14 @@ test1.out: test1.in
 	@-/bin/sh -c "sleep .2 > /dev/null 2>&1 || sleep 1"
 	-$(RUN_VIM) $*.in
 
-	# For flaky tests retry one time.
-	@/bin/sh -c "if test -f test.out -a $* = test61; then \
-		  if diff test.out $*.ok; \
-		  then echo flaky test ok first time; \
-		  else rm -rf $*.failed $(RM_ON_RUN); \
-			$(RUN_VIM) $*.in; \
-		  fi \
-		fi"
+	# For flaky tests retry one time.  No tests at the moment.
+	#@/bin/sh -c "if test -f test.out -a $* = test61; then \
+	#	  if diff test.out $*.ok; \
+	#	  then echo flaky test ok first time; \
+	#	  else rm -rf $*.failed $(RM_ON_RUN); \
+	#		$(RUN_VIM) $*.in; \
+	#	  fi \
+	#	fi"
 
 	# Check if the test.out file matches test.ok.
 	@/bin/sh -c "if test -f test.out; then \
@@ -121,10 +121,12 @@ nolog:
 RUN_VIMTEST = VIMRUNTIME=$(SCRIPTSOURCE); export VIMRUNTIME; $(VALGRIND) $(VIMPROG) -f $(GUI_FLAG) -u unix.vim $(NO_PLUGIN)
 
 newtests: newtestssilent
-	@/bin/sh -c "if test -f messages && grep -q 'FAILED' messages; then cat messages && cat test.log; fi"
+	@/bin/sh -c "if test -f messages && grep -q 'SKIPPED\|FAILED' messages; then cat messages && if test -f test.log; then cat test.log; fi ; fi"
 
 newtestssilent: $(NEW_TESTS)
 
 
 .vim.res:
-	$(RUN_VIMTEST) -u NONE -U NONE -S runtest.vim $*.vim
+	@echo "$(RUN_VIMTEST)" > vimcmd
+	$(RUN_VIMTEST) -U NONE -S runtest.vim $*.vim
+	@rm vimcmd

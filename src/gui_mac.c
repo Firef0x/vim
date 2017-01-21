@@ -1,4 +1,4 @@
-/* vi:set ts=8 sts=4 sw=4:
+/* vi:set ts=8 sts=4 sw=4 noet:
  *
  * VIM - Vi IMproved		by Bram Moolenaar
  *				GUI/Motif support by Robert Webb
@@ -633,7 +633,7 @@ Handle_KAHL_SRCH_AE(
     if (error)
 	return error;
 
-    for (buf = firstbuf; buf != NULL; buf = buf->b_next)
+    FOR_ALL_BUFFERS(buf)
 	if (buf->b_ml.ml_mfp != NULL
 		&& SearchData.theFile.parID == buf->b_FSSpec.parID
 		&& SearchData.theFile.name[0] == buf->b_FSSpec.name[0]
@@ -725,7 +725,7 @@ Handle_KAHL_MOD_AE(
 #endif
 
     numFiles = 0;
-    for (buf = firstbuf; buf != NULL; buf = buf->b_next)
+    FOR_ALL_BUFFERS(buf)
 	if (buf->b_ml.ml_mfp != NULL)
 	{
 	    /* Add this file to the list */
@@ -807,7 +807,7 @@ Handle_KAHL_GTTX_AE(
     if (error)
 	return error;
 
-    for (buf = firstbuf; buf != NULL; buf = buf->b_next)
+    FOR_ALL_BUFFERS(buf)
 	if (buf->b_ml.ml_mfp != NULL)
 	    if (GetTextData.theFile.parID == buf->b_FSSpec.parID)
 	    {
@@ -4830,7 +4830,7 @@ gui_mch_add_menu_item(vimmenu_T *menu, int idx)
 	char_u	    *p_actext;
 
 	p_actext = menu->actext;
-	key = find_special_key(&p_actext, &modifiers, FALSE, FALSE);
+	key = find_special_key(&p_actext, &modifiers, FALSE, FALSE, FALSE);
 	if (*p_actext != 0)
 	    key = 0; /* error: trailing text */
 	/* find_special_key() returns a keycode with as many of the
@@ -5120,6 +5120,12 @@ gui_mch_is_blinking(void)
     return FALSE;
 }
 
+    int
+gui_mch_is_blink_off(void)
+{
+    return FALSE;
+}
+
 /*
  * Cursor blink functions.
  *
@@ -5175,10 +5181,10 @@ gui_mch_start_blink(void)
 /*
  * Return the RGB value of a pixel as long.
  */
-    long_u
+    guicolor_T
 gui_mch_get_rgb(guicolor_T pixel)
 {
-    return (Red(pixel) << 16) + (Green(pixel) << 8) + Blue(pixel);
+    return (guicolor_T)((Red(pixel) << 16) + (Green(pixel) << 8) + Blue(pixel));
 }
 
 
@@ -6416,7 +6422,7 @@ getTabCount(void)
     tabpage_T	*tp;
     int		numTabs = 0;
 
-    for (tp = first_tabpage; tp != NULL; tp = tp->tp_next)
+    FOR_ALL_TABPAGES(tp)
 	++numTabs;
     return numTabs;
 }

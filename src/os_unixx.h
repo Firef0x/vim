@@ -1,4 +1,4 @@
-/* vi:set ts=8 sts=4 sw=4:
+/* vi:set ts=8 sts=4 sw=4 noet:
  *
  * VIM - Vi IMproved	by Bram Moolenaar
  *
@@ -17,8 +17,8 @@
 # define signal sigset
 #endif
 
-   /* sun's sys/ioctl.h redefines symbols from termio world */
-#if defined(HAVE_SYS_IOCTL_H) && !defined(sun)
+   /* Sun's sys/ioctl.h redefines symbols from termio world */
+#if defined(HAVE_SYS_IOCTL_H) && !defined(SUN_SYSTEM)
 # include <sys/ioctl.h>
 #endif
 
@@ -113,7 +113,7 @@
 
 /* shared library access */
 #if defined(HAVE_DLFCN_H) && defined(USE_DLOPEN)
-# ifdef __MVS__
+# if defined(__MVS__) && !defined (__SUSV3)
     /* needed to define RTLD_LAZY (Anthony Giorgio) */
 #  define __SUSV3
 # endif

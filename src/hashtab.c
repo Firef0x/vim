@@ -1,4 +1,4 @@
-/* vi:set ts=8 sts=4 sw=4:
+/* vi:set ts=8 sts=4 sw=4 noet:
  *
  * VIM - Vi IMproved	by Bram Moolenaar
  *
@@ -28,8 +28,6 @@
  */
 
 #include "vim.h"
-
-#if defined(FEAT_EVAL) || defined(FEAT_SYN_HL) || defined(PROTO)
 
 #if 0
 # define HT_DEBUG	/* extra checks for table consistency  and statistics */
@@ -210,7 +208,7 @@ hash_add(hashtab_T *ht, char_u *key)
     hi = hash_lookup(ht, key, hash);
     if (!HASHITEM_EMPTY(hi))
     {
-	EMSG2(_(e_intern2), "hash_add()");
+	internal_error("hash_add()");
 	return FAIL;
     }
     return hash_add_item(ht, hi, key, hash);
@@ -478,5 +476,3 @@ hash_hash(char_u *key)
 
     return hash;
 }
-
-#endif

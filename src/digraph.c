@@ -1,4 +1,4 @@
-/* vi:set ts=8 sts=4 sw=4:
+/* vi:set ts=8 sts=4 sw=4 noet:
  *
  * VIM - Vi IMproved	by Bram Moolenaar
  *
@@ -1312,6 +1312,7 @@ static digr_T digraphdefault[] =
 	{'/', '-', 0x2020},
 	{'/', '=', 0x2021},
 	{'.', '.', 0x2025},
+	{',', '.', 0x2026},
 	{'%', '0', 0x2030},
 	{'1', '\'', 0x2032},
 	{'2', '\'', 0x2033},
@@ -2466,4 +2467,3 @@ keymap_unload(void)
 }
 
 #endif /* FEAT_KEYMAP */
-

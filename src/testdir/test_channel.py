@@ -38,15 +38,15 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
             print("received: {0}".format(received))
 
             # We may receive two messages at once. Take the part up to the
-            # matching "]" (recognized by finding "][").
+            # newline, which should be after the matching "]".
             todo = received
             while todo != '':
-                splitidx = todo.find('][')
+                splitidx = todo.find('\n')
                 if splitidx < 0:
                      used = todo
                      todo = ''
                 else:
-                     used = todo[:splitidx + 1]
+                     used = todo[:splitidx]
                      todo = todo[splitidx + 1:]
                 if used != received:
                     print("using: {0}".format(used))
@@ -126,6 +126,9 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
                         print("sending: {0}".format(cmd))
                         self.request.sendall(cmd.encode('utf-8'))
                         response = "ok"
+                        # Need to wait for Vim to give up, otherwise it
+                        # sometimes fails on OS X.
+                        time.sleep(0.2)
                     elif decoded[1] == 'malformed2':
                         cmd = '"unterminated string'
                         print("sending: {0}".format(cmd))

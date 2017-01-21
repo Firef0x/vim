@@ -1,4 +1,4 @@
-/* vi:set ts=8 sts=4 sw=4:
+/* vi:set ts=8 sts=4 sw=4 noet:
  *
  * VIM - Vi IMproved	by Bram Moolenaar
  *
@@ -367,9 +367,18 @@ free_search_patterns(void)
     int
 ignorecase(char_u *pat)
 {
-    int		ic = p_ic;
+    return ignorecase_opt(pat, p_ic, p_scs);
+}
 
-    if (ic && !no_smartcase && p_scs
+/*
+ * As ignorecase() put pass the "ic" and "scs" flags.
+ */
+    int
+ignorecase_opt(char_u *pat, int ic_in, int scs)
+{
+    int		ic = ic_in;
+
+    if (ic && !no_smartcase && scs
 #ifdef FEAT_INS_EXPAND
 				&& !(ctrl_x_mode && curbuf->b_p_inf)
 #endif
@@ -1231,14 +1240,13 @@ do_search(
 	{
 	    if (spats[RE_SEARCH].pat == NULL)	    /* no previous pattern */
 	    {
-		pat = spats[RE_SUBST].pat;
-		if (pat == NULL)
+		searchstr = spats[RE_SUBST].pat;
+		if (searchstr == NULL)
 		{
 		    EMSG(_(e_noprevre));
 		    retval = 0;
 		    goto end_do_search;
 		}
-		searchstr = pat;
 	    }
 	    else
 	    {
@@ -1687,7 +1695,8 @@ searchc(cmdarg_T *cap, int t_cmd)
 		}
 		else
 		{
-		    if (vim_memcmp(p + col, lastc_bytes, lastc_bytelen) == 0 && stop)
+		    if (memcmp(p + col, lastc_bytes, lastc_bytelen) == 0
+								       && stop)
 			break;
 		}
 		stop = TRUE;
@@ -3629,6 +3638,7 @@ extend:
 	    ++curwin->w_cursor.col;
 	VIsual = start_pos;
 	VIsual_mode = 'v';
+	redraw_cmdline = TRUE;		/* show mode later */
 	redraw_curbuf_later(INVERTED);	/* update the inversion */
     }
     else
@@ -4719,7 +4729,7 @@ current_search(
 }
 
 /*
- * Check if the pattern is one character or zero-width.
+ * Check if the pattern is one character long or zero-width.
  * If move is TRUE, check from the beginning of the buffer, else from the
  * current cursor position.
  * Returns TRUE, FALSE or -1 for failure.
@@ -4734,10 +4744,15 @@ is_one_char(char_u *pattern, int move)
     int		save_called_emsg = called_emsg;
     int		flag = 0;
 
+    if (pattern == NULL)
+	pattern = spats[last_idx].pat;
+
     if (search_regcomp(pattern, RE_SEARCH, RE_SEARCH,
 					      SEARCH_KEEP, &regmatch) == FAIL)
 	return -1;
 
+    /* init startcol correctly */
+    regmatch.startpos[0].col = -1;
     /* move to match */
     if (move)
 	clearpos(&pos)
@@ -4748,22 +4763,30 @@ is_one_char(char_u *pattern, int move)
 	flag = SEARCH_START;
     }
 
-    if (searchit(curwin, curbuf, &pos, FORWARD, spats[last_idx].pat, 1,
+    if (searchit(curwin, curbuf, &pos, FORWARD, pattern, 1,
 			      SEARCH_KEEP + flag, RE_SEARCH, 0, NULL) != FAIL)
     {
 	/* Zero-width pattern should match somewhere, then we can check if
 	 * start and end are in the same position. */
 	called_emsg = FALSE;
-	nmatched = vim_regexec_multi(&regmatch, curwin, curbuf,
-						  pos.lnum, (colnr_T)0, NULL);
+	do
+	{
+	    regmatch.startpos[0].col++;
+	    nmatched = vim_regexec_multi(&regmatch, curwin, curbuf,
+					    pos.lnum, regmatch.startpos[0].col, NULL);
+	    if (!nmatched)
+		break;
+	} while (regmatch.startpos[0].col < pos.col);
 
 	if (!called_emsg)
+	{
 	    result = (nmatched != 0
 		&& regmatch.startpos[0].lnum == regmatch.endpos[0].lnum
 		&& regmatch.startpos[0].col == regmatch.endpos[0].col);
-
-	if (!result && inc(&pos) >= 0 && pos.col == regmatch.endpos[0].col)
-	    result = TRUE;
+	    /* one char width */
+	    if (!result && inc(&pos) >= 0 && pos.col == regmatch.endpos[0].col)
+		result = TRUE;
+	}
     }
 
     called_emsg |= save_called_emsg;
@@ -5407,7 +5430,7 @@ exit_matched:
 	line_breakcheck();
 #ifdef FEAT_INS_EXPAND
 	if (action == ACTION_EXPAND)
-	    ins_compl_check_keys(30);
+	    ins_compl_check_keys(30, FALSE);
 	if (got_int || compl_interrupted)
 #else
 	if (got_int)

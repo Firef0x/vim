@@ -1,4 +1,4 @@
-/* vi:set ts=8 sts=4 sw=4:
+/* vi:set ts=8 sts=4 sw=4 noet:
  *
  * VIM - Vi IMproved	by Bram Moolenaar
  *
@@ -414,8 +414,8 @@ static const struct nv_cmd
     {K_TABMENU, nv_tabmenu,	0,			0},
 #endif
 #ifdef FEAT_FKMAP
-    {K_F8,	farsi_fkey,	0,			0},
-    {K_F9,	farsi_fkey,	0,			0},
+    {K_F8,	farsi_f8,	0,			0},
+    {K_F9,	farsi_f9,	0,			0},
 #endif
 #ifdef FEAT_NETBEANS_INTG
     {K_F21,	nv_nbcmd,	NV_NCH_ALW,		0},
@@ -1609,6 +1609,8 @@ do_pending_operator(cmdarg_T *cap, int old_col, int gui_yank)
 	    oap->start = curwin->w_cursor;
 	}
 
+	/* Just in case lines were deleted that make the position invalid. */
+	check_pos(curwin->w_buffer, &oap->end);
 	oap->line_count = oap->end.lnum - oap->start.lnum + 1;
 
 #ifdef FEAT_VIRTUALEDIT
@@ -1982,7 +1984,7 @@ do_pending_operator(cmdarg_T *cap, int old_col, int gui_yank)
 		op_formatexpr(oap);	/* use expression */
 	    else
 #endif
-		if (*p_fp != NUL)
+		if (*p_fp != NUL || *curbuf->b_p_fp != NUL)
 		op_colon(oap);		/* use external command */
 	    else
 		op_format(oap, FALSE);	/* use internal function */
@@ -1993,6 +1995,11 @@ do_pending_operator(cmdarg_T *cap, int old_col, int gui_yank)
 	    break;
 
 	case OP_FUNCTION:
+#ifdef FEAT_LINEBREAK
+	    /* Restore linebreak, so that when the user edits it looks as
+	     * before. */
+	    curwin->w_p_lbr = lbr_saved;
+#endif
 	    op_function(oap);		/* call 'operatorfunc' */
 	    break;
 
@@ -2190,10 +2197,12 @@ op_colon(oparg_T *oap)
     }
     else if (oap->op_type == OP_FORMAT)
     {
-	if (*p_fp == NUL)
-	    stuffReadbuff((char_u *)"fmt");
-	else
+	if (*curbuf->b_p_fp != NUL)
+	    stuffReadbuff(curbuf->b_p_fp);
+	else if (*p_fp != NUL)
 	    stuffReadbuff(p_fp);
+	else
+	    stuffReadbuff((char_u *)"fmt");
 	stuffReadbuff((char_u *)"\n']");
     }
 
@@ -2973,9 +2982,9 @@ do_mouse(
 	if (State & INSERT)
 	    stuffcharReadbuff(Ctrl_O);
 	if (curwin->w_llist_ref == NULL)	/* quickfix window */
-	    stuffReadbuff((char_u *)":.cc\n");
+	    do_cmdline_cmd((char_u *)".cc");
 	else					/* location list window */
-	    stuffReadbuff((char_u *)":.ll\n");
+	    do_cmdline_cmd((char_u *)".ll");
 	got_click = FALSE;		/* ignore drag&release now */
     }
 #endif
@@ -4073,7 +4082,7 @@ check_scrollbind(linenr_T topline_diff, long leftcol_diff)
      * loop through the scrollbound windows and scroll accordingly
      */
     VIsual_select = VIsual_active = 0;
-    for (curwin = firstwin; curwin; curwin = curwin->w_next)
+    FOR_ALL_WINDOWS(curwin)
     {
 	curbuf = curwin->w_buffer;
 	/* skip original window  and windows with 'noscrollbind' */
@@ -4238,6 +4247,52 @@ nv_gd(
 }
 
 /*
+ * Return TRUE if line[offset] is not inside a C-style comment or string, FALSE
+ * otherwise.
+ */
+    static int
+is_ident(char_u *line, int offset)
+{
+    int	i;
+    int	incomment = FALSE;
+    int	instring = 0;
+    int	prev = 0;
+
+    for (i = 0; i < offset && line[i] != NUL; i++)
+    {
+	if (instring != 0)
+	{
+	    if (prev != '\\' && line[i] == instring)
+		instring = 0;
+	}
+	else if ((line[i] == '"' || line[i] == '\'') && !incomment)
+	{
+	    instring = line[i];
+	}
+	else
+	{
+	    if (incomment)
+	    {
+		if (prev == '*' && line[i] == '/')
+		    incomment = FALSE;
+	    }
+	    else if (prev == '/' && line[i] == '*')
+	    {
+		incomment = TRUE;
+	    }
+	    else if (prev == '/' && line[i] == '/')
+	    {
+		return FALSE;
+	    }
+	}
+
+	prev = line[i];
+    }
+
+    return incomment == FALSE && instring == 0;
+}
+
+/*
  * Search for variable declaration of "ptr[len]".
  * When "locally" is TRUE in the current function ("gd"), otherwise in the
  * current file ("gD").
@@ -4250,7 +4305,7 @@ find_decl(
     int		len,
     int		locally,
     int		thisblock,
-    int		searchflags)	/* flags passed to searchit() */
+    int		flags_arg)	/* flags passed to searchit() */
 {
     char_u	*pat;
     pos_T	old_pos;
@@ -4261,6 +4316,8 @@ find_decl(
     int		save_p_scs;
     int		retval = OK;
     int		incll;
+    int		searchflags = flags_arg;
+    int		valid;
 
     if ((pat = alloc(len + 7)) == NULL)
 	return FAIL;
@@ -4298,6 +4355,7 @@ find_decl(
     clearpos(&found_pos);
     for (;;)
     {
+	valid = FALSE;
 	t = searchit(curwin, curbuf, &curwin->w_cursor, FORWARD,
 			    pat, 1L, searchflags, RE_LAST, (linenr_T)0, NULL);
 	if (curwin->w_cursor.lnum >= old_pos.lnum)
@@ -4334,9 +4392,20 @@ find_decl(
 	    continue;
 	}
 #endif
-	if (!locally)	/* global search: use first match found */
+	valid = is_ident(ml_get_curline(), curwin->w_cursor.col);
+
+	/* If the current position is not a valid identifier and a previous
+	 * match is present, favor that one instead. */
+	if (!valid && found_pos.lnum != 0)
+	{
+	    curwin->w_cursor = found_pos;
 	    break;
-	if (curwin->w_cursor.lnum >= par_pos.lnum)
+	}
+
+	/* Global search: use first valid match found */
+	if (valid && !locally)
+	    break;
+	if (valid && curwin->w_cursor.lnum >= par_pos.lnum)
 	{
 	    /* If we previously found a valid position, use it. */
 	    if (found_pos.lnum != 0)
@@ -4344,10 +4413,21 @@ find_decl(
 	    break;
 	}
 
-	/* For finding a local variable and the match is before the "{" search
-	 * to find a later match.  For K&R style function declarations this
-	 * skips the function header without types. */
-	found_pos = curwin->w_cursor;
+	/* For finding a local variable and the match is before the "{" or
+	 * inside a comment, continue searching.  For K&R style function
+	 * declarations this skips the function header without types. */
+	if (!valid)
+	{
+	    /* Braces needed due to macro expansion of clearpos. */
+	    clearpos(&found_pos);
+	}
+	else
+	{
+	    found_pos = curwin->w_cursor;
+	}
+	/* Remove SEARCH_START from flags to avoid getting stuck at one
+	 * position. */
+	searchflags &= ~SEARCH_START;
     }
 
     if (t == FAIL)
@@ -5640,9 +5720,13 @@ nv_ident(cmdarg_T *cap)
      */
     if (cmdchar == 'K' && !kp_help)
     {
-	/* Escape the argument properly for a shell command */
 	ptr = vim_strnsave(ptr, n);
-	p = vim_strsave_shellescape(ptr, TRUE, TRUE);
+	if (kp_ex)
+	    /* Escape the argument properly for an Ex command */
+	    p = vim_strsave_fnameescape(ptr, FALSE);
+	else
+	    /* Escape the argument properly for a shell command */
+	    p = vim_strsave_shellescape(ptr, TRUE, TRUE);
 	vim_free(ptr);
 	if (p == NULL)
 	{
@@ -6094,8 +6178,7 @@ nv_up(cmdarg_T *cap)
  * cap->arg is TRUE for CR and "+": Move cursor to first non-blank.
  */
     static void
-nv_down(
-    cmdarg_T	*cap)
+nv_down(cmdarg_T *cap)
 {
     if (mod_mask & MOD_MASK_SHIFT)
     {
@@ -6225,6 +6308,7 @@ nv_dollar(cmdarg_T *cap)
 nv_search(cmdarg_T *cap)
 {
     oparg_T	*oap = cap->oap;
+    pos_T	save_cursor = curwin->w_cursor;
 
     if (cap->cmdchar == '?' && cap->oap->op_type == OP_ROT13)
     {
@@ -6235,6 +6319,8 @@ nv_search(cmdarg_T *cap)
 	return;
     }
 
+    /* When using 'incsearch' the cursor may be moved to set a different search
+     * start position. */
     cap->searchbuf = getcmdline(cap->cmdchar, cap->count1, 0);
 
     if (cap->searchbuf == NULL)
@@ -6244,7 +6330,8 @@ nv_search(cmdarg_T *cap)
     }
 
     (void)normal_search(cap, cap->cmdchar, cap->searchbuf,
-						(cap->arg ? 0 : SEARCH_MARK));
+			(cap->arg || !equalpos(save_cursor, curwin->w_cursor))
+							   ? 0 : SEARCH_MARK);
 }
 
 /*

@@ -1,7 +1,7 @@
 " Vim filetype plugin file
 " Language:	man
 " Maintainer:	SungHyun Nam <goweol@gmail.com>
-" Last Change: 	2016 Feb 04
+" Last Change: 	2017 Jan 04
 
 " To make the ":Man" command available before editing a manual page, source
 " this script from your startup vimrc file.
@@ -47,6 +47,7 @@ endif
 if exists(":Man") != 2
   com -nargs=+ Man call s:GetPage(<f-args>)
   nmap <Leader>K :call <SID>PreGetPage(0)<CR>
+  nmap <Plug>ManPreGetPage :call <SID>PreGetPage(0)<CR>
 endif
 
 " Define functions only once.
@@ -150,7 +151,17 @@ func <SID>GetPage(...)
       endwhile
     endif
     if &filetype != "man"
-      new
+      if exists("g:ft_man_open_mode")
+        if g:ft_man_open_mode == "vert"
+          vnew
+        elseif g:ft_man_open_mode == "tab"
+          tabnew
+        else
+          new
+        endif
+      else
+        new
+      endif
       setl nonu fdc=0
     endif
   endif
@@ -160,10 +171,15 @@ func <SID>GetPage(...)
 
   setl ma nonu nornu nofen
   silent exec "norm 1GdG"
+  let unsetwidth = 0
   if empty($MANWIDTH)
     let $MANWIDTH = winwidth(0)
+    let unsetwidth = 1
   endif
   silent exec "r!/usr/bin/man ".s:GetCmdArg(sect, page)." | col -b"
+  if unsetwidth
+    let $MANWIDTH = ''
+  endif
   " Remove blank lines from top and bottom.
   while getline(1) =~ '^\s*$'
     silent keepj norm ggdd
@@ -175,6 +191,7 @@ func <SID>GetPage(...)
   setl ft=man nomod
   setl bufhidden=hide
   setl nobuflisted
+  setl noma
 endfunc
 
 func <SID>PopPage()
@@ -195,4 +212,4 @@ endfunc
 
 endif
 
-" vim: set sw=2:
+" vim: set sw=2 ts=8 noet:
