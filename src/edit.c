@@ -463,7 +463,10 @@ edit(
 	else
 #endif
 	{
-	    AppendCharToRedobuff(cmdchar);
+	    if (cmdchar == K_PS)
+		AppendCharToRedobuff('a');
+	    else
+		AppendCharToRedobuff(cmdchar);
 	    if (cmdchar == 'g')		    /* "gI" command */
 		AppendCharToRedobuff('I');
 	    else if (cmdchar == 'r')	    /* "r<CR>" command */
@@ -531,6 +534,10 @@ edit(
     revins_legal = 0;
     revins_scol = -1;
 #endif
+    if (!p_ek)
+	/* Disable bracketed paste mode, we won't recognize the escape
+	 * sequences. */
+	out_str(T_BD);
 
     /*
      * Handle restarting Insert mode.
@@ -8686,6 +8693,9 @@ ins_esc(
 #ifdef CURSOR_SHAPE
     ui_cursor_shape();		/* may show different cursor shape */
 #endif
+    if (!p_ek)
+	/* Re-enable bracketed paste mode. */
+	out_str(T_BE);
 
     /*
      * When recording or for CTRL-O, need to display the new mode.
@@ -9568,8 +9578,10 @@ bracketed_paste(paste_mode_T mode, int drop, garray_T *gap)
 			if (idx == 1 && (c == CAR || c == K_KENTER || c == NL))
 			    ins_eol(c);
 			else
+			{
 			    ins_char_bytes(buf, idx);
-			AppendToRedobuffLit(buf, idx);
+			    AppendToRedobuffLit(buf, idx);
+			}
 		    }
 		    break;
 
