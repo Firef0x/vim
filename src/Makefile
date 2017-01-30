@@ -2147,6 +2147,7 @@ test_arglist \
 	test_langmap \
 	test_largefile \
 	test_lispwords \
+	test_lua \
 	test_man \
 	test_mapping \
 	test_marks \
@@ -2168,6 +2169,8 @@ test_arglist \
 	test_popup \
 	test_profile \
 	test_put \
+	test_python2 \
+	test_python3 \
 	test_pyx2 \
 	test_pyx3 \
 	test_quickfix \
@@ -2195,6 +2198,7 @@ test_arglist \
 	test_tabpage \
 	test_tagcase \
 	test_tagjump \
+	test_tcl \
 	test_textobjects \
 	test_timers \
 	test_true_false \
