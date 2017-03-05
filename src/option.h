@@ -631,6 +631,9 @@ EXTERN char_u	*p_luadll;	/* 'luadll' */
 EXTERN int	p_macatsui;	/* 'macatsui' */
 #endif
 EXTERN int	p_magic;	/* 'magic' */
+#ifdef FEAT_MBYTE
+EXTERN char_u	*p_menc;	/* 'makeencoding' */
+#endif
 #ifdef FEAT_QUICKFIX
 EXTERN char_u	*p_mef;		/* 'makeef' */
 EXTERN char_u	*p_mp;		/* 'makeprg' */
@@ -1065,6 +1068,9 @@ enum
 #ifdef FEAT_LISP
     , BV_LISP
     , BV_LW
+#endif
+#ifdef FEAT_MBYTE
+    , BV_MENC
 #endif
     , BV_MA
     , BV_ML
