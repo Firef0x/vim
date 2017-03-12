@@ -4211,7 +4211,7 @@ do_ecmd(
 
 	/* If autocommands change the cursor position or topline, we should
 	 * keep it.  Also when it moves within a line. */
-	if (!equalpos(curwin->w_cursor, orig_pos))
+	if (!EQUAL_POS(curwin->w_cursor, orig_pos))
 	{
 	    newlnum = curwin->w_cursor.lnum;
 	    newcol = curwin->w_cursor.col;
