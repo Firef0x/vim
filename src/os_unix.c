@@ -6139,7 +6139,7 @@ mch_expand_wildcards(
 	STRCAT(command, pat[0] + 1);		/* exclude first backtick */
 	p = command + STRLEN(command) - 1;
 	*p-- = ')';				/* remove last backtick */
-	while (p > command && vim_iswhite(*p))
+	while (p > command && VIM_ISWHITE(*p))
 	    --p;
 	if (*p == '&')				/* remove trailing '&' */
 	{
@@ -6522,7 +6522,7 @@ save_patterns(
     int
 mch_has_exp_wildcard(char_u *p)
 {
-    for ( ; *p; mb_ptr_adv(p))
+    for ( ; *p; MB_PTR_ADV(p))
     {
 	if (*p == '\\' && p[1] != NUL)
 	    ++p;
@@ -6546,7 +6546,7 @@ mch_has_exp_wildcard(char_u *p)
     int
 mch_has_wildcard(char_u *p)
 {
-    for ( ; *p; mb_ptr_adv(p))
+    for ( ; *p; MB_PTR_ADV(p))
     {
 	if (*p == '\\' && p[1] != NUL)
 	    ++p;

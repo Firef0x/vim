@@ -113,9 +113,6 @@ static void	copy_yank_reg(yankreg_T *reg);
 static void	may_set_selection(void);
 #endif
 static void	dis_msg(char_u *p, int skip_esc);
-#if defined(FEAT_COMMENTS) || defined(PROTO)
-static char_u	*skip_comment(char_u *line, int process, int include_space, int *is_comment);
-#endif
 static void	block_prep(oparg_T *oap, struct block_def *, linenr_T, int);
 static int	do_addsub(int op_type, pos_T *pos, int length, linenr_T Prenum1);
 #if defined(FEAT_CLIPBOARD) || defined(FEAT_EVAL)
@@ -429,7 +426,7 @@ shift_block(oparg_T *oap, int amount)
 #endif
 		++bd.textstart;
 	}
-	for ( ; vim_iswhite(*bd.textstart); )
+	for ( ; VIM_ISWHITE(*bd.textstart); )
 	{
 	    /* TODO: is passing bd.textstart for start of the line OK? */
 	    incr = lbr_chartabsize_adv(bd.textstart, &bd.textstart,
@@ -486,12 +483,12 @@ shift_block(oparg_T *oap, int amount)
 	 * the part of which is displayed at the block's beginning. Let's start
 	 * searching from the next character. */
 	if (bd.startspaces)
-	    mb_ptr_adv(non_white);
+	    MB_PTR_ADV(non_white);
 
 	/* The character's column is in "bd.start_vcol".  */
 	non_white_col = bd.start_vcol;
 
-	while (vim_iswhite(*non_white))
+	while (VIM_ISWHITE(*non_white))
 	{
 	    incr = lbr_chartabsize_adv(bd.textstart, &non_white, non_white_col);
 	    non_white_col += incr;
@@ -526,7 +523,7 @@ shift_block(oparg_T *oap, int amount)
 	    if (verbatim_copy_width + incr > destination_col)
 		break;
 	    verbatim_copy_width += incr;
-	    mb_ptr_adv(verbatim_copy_end);
+	    MB_PTR_ADV(verbatim_copy_end);
 	}
 
 	/* If "destination_col" is different from the width of the initial
@@ -3458,7 +3455,7 @@ do_put(
 		goto end;
 	    p = ml_get_cursor();
 	    if (dir == FORWARD && *p != NUL)
-		mb_ptr_adv(p);
+		MB_PTR_ADV(p);
 	    ptr = vim_strsave(p);
 	    if (ptr == NULL)
 		goto end;
@@ -3468,7 +3465,7 @@ do_put(
 	    oldp = ml_get_curline();
 	    p = oldp + curwin->w_cursor.col;
 	    if (dir == FORWARD && *p != NUL)
-		mb_ptr_adv(p);
+		MB_PTR_ADV(p);
 	    ptr = vim_strnsave(oldp, p - oldp);
 	    if (ptr == NULL)
 		goto end;
@@ -4301,7 +4298,7 @@ dis_msg(
  * is_comment - will indicate whether the current line ends with an unclosed
  *		comment.
  */
-    static char_u *
+    char_u *
 skip_comment(
     char_u   *line,
     int      process,
@@ -4494,11 +4491,11 @@ do_join(
 	    if (has_mbyte)
 	    {
 		cend = curr + currsize;
-		mb_ptr_back(curr, cend);
+		MB_PTR_BACK(curr, cend);
 		endcurr1 = (*mb_ptr2char)(cend);
 		if (cend > curr)
 		{
-		    mb_ptr_back(curr, cend);
+		    MB_PTR_BACK(curr, cend);
 		    endcurr2 = (*mb_ptr2char)(cend);
 		}
 	    }
@@ -4660,18 +4657,18 @@ same_leader(
     line1 = vim_strsave(ml_get(lnum));
     if (line1 != NULL)
     {
-	for (idx1 = 0; vim_iswhite(line1[idx1]); ++idx1)
+	for (idx1 = 0; VIM_ISWHITE(line1[idx1]); ++idx1)
 	    ;
 	line2 = ml_get(lnum + 1);
 	for (idx2 = 0; idx2 < leader2_len; ++idx2)
 	{
-	    if (!vim_iswhite(line2[idx2]))
+	    if (!VIM_ISWHITE(line2[idx2]))
 	    {
 		if (line1[idx1++] != line2[idx2])
 		    break;
 	    }
 	    else
-		while (vim_iswhite(line1[idx1]))
+		while (VIM_ISWHITE(line1[idx1]))
 		    ++idx1;
 	}
 	vim_free(line1);
@@ -5097,10 +5094,10 @@ ends_in_white(linenr_T lnum)
 
     if (*s == NUL)
 	return FALSE;
-    /* Don't use STRLEN() inside vim_iswhite(), SAS/C complains: "macro
+    /* Don't use STRLEN() inside VIM_ISWHITE(), SAS/C complains: "macro
      * invocation may call function multiple times". */
     l = STRLEN(s) - 1;
-    return vim_iswhite(s[l]);
+    return VIM_ISWHITE(s[l]);
 }
 
 /*
@@ -5255,7 +5252,7 @@ block_prep(
 	incr = lbr_chartabsize(line, pstart, (colnr_T)bdp->start_vcol);
 	bdp->start_vcol += incr;
 #ifdef FEAT_VISUALEXTRA
-	if (vim_iswhite(*pstart))
+	if (VIM_ISWHITE(*pstart))
 	{
 	    bdp->pre_whitesp += incr;
 	    bdp->pre_whitesp_c++;
@@ -5267,7 +5264,7 @@ block_prep(
 	}
 #endif
 	prev_pstart = pstart;
-	mb_ptr_adv(pstart);
+	MB_PTR_ADV(pstart);
     }
     bdp->start_char_vcols = incr;
     if (bdp->start_vcol < oap->start_vcol)	/* line too short */
