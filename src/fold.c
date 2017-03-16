@@ -64,7 +64,6 @@ static void deleteFoldMarkers(fold_T *fp, int recursive, linenr_T lnum_off);
 static void foldDelMarker(linenr_T lnum, char_u *marker, int markerlen);
 static void foldUpdateIEMS(win_T *wp, linenr_T top, linenr_T bot);
 static void parseMarker(win_T *wp);
-static void foldMoveRange_int(garray_T *gap, linenr_T line1, linenr_T line2, linenr_T dest);
 
 static char *e_nofold = N_("E490: No fold found");
 
@@ -1076,12 +1075,6 @@ foldAdjustCursor(void)
     (void)hasFolding(curwin->w_cursor.lnum, &curwin->w_cursor.lnum, NULL);
 }
 
-/* foldMoveRange() {{{2 */
-    void
-foldMoveRange(garray_T *gap, linenr_T line1, linenr_T line2, linenr_T dest)
-{
-    foldMoveRange_int(gap, line1, line2, dest);
-}
 /* Internal functions for "fold_T" {{{1 */
 /* cloneFoldGrowArray() {{{2 */
 /*
@@ -2992,7 +2985,7 @@ foldReverseOrder(garray_T *gap, linenr_T start, linenr_T end)
     }
 }
 
-/* foldMoveRange_int() {{{2 */
+/* foldMoveRange() {{{2 */
 /*
  * Move folds within the inclusive range "line1" to "line2" to after "dest"
  * requires "line1" <= "line2" <= "dest"
@@ -3028,16 +3021,17 @@ foldReverseOrder(garray_T *gap, linenr_T start, linenr_T end)
     static void
 truncate_fold(fold_T *fp, linenr_T end)
 {
+    end += 1;
     foldRemove(&fp->fd_nested, end - fp->fd_top, MAXLNUM);
-    fp->fd_len = end - fp->fd_top + 1;
+    fp->fd_len = end - fp->fd_top;
 }
 
 #define fold_end(fp) ((fp)->fd_top + (fp)->fd_len - 1)
 #define valid_fold(fp, gap) ((fp) < ((fold_T *)(gap)->ga_data + (gap)->ga_len))
 #define fold_index(fp, gap) ((size_t)(fp - ((fold_T *)(gap)->ga_data)))
 
-    static void
-foldMoveRange_int(garray_T *gap, linenr_T line1, linenr_T line2, linenr_T dest)
+    void
+foldMoveRange(garray_T *gap, linenr_T line1, linenr_T line2, linenr_T dest)
 {
     fold_T *fp;
     linenr_T range_len = line2 - line1 + 1;
@@ -3069,7 +3063,7 @@ foldMoveRange_int(garray_T *gap, linenr_T line1, linenr_T line2, linenr_T dest)
 	}
 	else
 	    /* Case 2 truncate fold, folds after this one must be dealt with. */
-	    truncate_fold(fp, line1);
+	    truncate_fold(fp, line1 - 1);
 
 	/* Look at the next fold, and treat that one as if it were the first
 	 * after  "line1" (because now it is). */
@@ -3085,11 +3079,11 @@ foldMoveRange_int(garray_T *gap, linenr_T line1, linenr_T line2, linenr_T dest)
     }
     else if (fp->fd_top > line2)
     {
-	for (; valid_fold(fp, gap) && fold_end(fp) < dest; fp++)
+	for (; valid_fold(fp, gap) && fold_end(fp) <= dest; fp++)
 	/* Case 9. (for all case 9's) -- shift up. */
 	    fp->fd_top -= range_len;
 
-	if (valid_fold(fp, gap) && fp->fd_top < dest)
+	if (valid_fold(fp, gap) && fp->fd_top <= dest)
 	{
 	    /* Case 8. -- ensure truncated at dest, shift up */
 	    truncate_fold(fp, dest);
@@ -3108,7 +3102,7 @@ foldMoveRange_int(garray_T *gap, linenr_T line1, linenr_T line2, linenr_T dest)
     }
 
     /* Case 5 or 6
-     * changes rely on whether there are folds between the end of 
+     * changes rely on whether there are folds between the end of
      * this fold and "dest".
      */
     move_start = fold_index(fp, gap);
