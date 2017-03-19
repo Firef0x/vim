@@ -1,4 +1,4 @@
-/* vi:set ts=8 sts=4 sw=4:
+/* vi:set ts=8 sts=4 sw=4 noet:
  *
  * VIM - Vi IMproved	by Bram Moolenaar
  * X command server by Flemming Madsen
@@ -167,25 +167,40 @@ struct ServerReply
 static garray_T serverReply = { 0, 0, 0, 0, 0 };
 enum ServerReplyOp { SROP_Find, SROP_Add, SROP_Delete };
 
-typedef int (*EndCond) __ARGS((void *));
+typedef int (*EndCond)(void *);
+
+struct x_cmdqueue
+{
+    char_u		*propInfo;
+    long_u		len;
+    struct x_cmdqueue	*next;
+    struct x_cmdqueue	*prev;
+};
+
+typedef struct x_cmdqueue x_queue_T;
+
+/* dummy node, header for circular queue */
+static x_queue_T head = {NULL, 0, NULL, NULL};
 
 /*
  * Forward declarations for procedures defined later in this file:
  */
 
-static Window	LookupName __ARGS((Display *dpy, char_u *name, int delete, char_u **loose));
-static int	SendInit __ARGS((Display *dpy));
-static int	DoRegisterName __ARGS((Display *dpy, char_u *name));
-static void	DeleteAnyLingerer __ARGS((Display *dpy, Window w));
-static int	GetRegProp __ARGS((Display *dpy, char_u **regPropp, long_u *numItemsp, int domsg));
-static int	WaitForPend __ARGS((void *p));
-static int	WaitForReply __ARGS((void *p));
-static int	WindowValid __ARGS((Display *dpy, Window w));
-static void	ServerWait __ARGS((Display *dpy, Window w, EndCond endCond, void *endData, int localLoop, int seconds));
-static struct ServerReply *ServerReplyFind __ARGS((Window w, enum ServerReplyOp op));
-static int	AppendPropCarefully __ARGS((Display *display, Window window, Atom property, char_u *value, int length));
-static int	x_error_check __ARGS((Display *dpy, XErrorEvent *error_event));
-static int	IsSerialName __ARGS((char_u *name));
+static Window	LookupName(Display *dpy, char_u *name, int delete, char_u **loose);
+static int	SendInit(Display *dpy);
+static int	DoRegisterName(Display *dpy, char_u *name);
+static void	DeleteAnyLingerer(Display *dpy, Window w);
+static int	GetRegProp(Display *dpy, char_u **regPropp, long_u *numItemsp, int domsg);
+static int	WaitForPend(void *p);
+static int	WaitForReply(void *p);
+static int	WindowValid(Display *dpy, Window w);
+static void	ServerWait(Display *dpy, Window w, EndCond endCond, void *endData, int localLoop, int seconds);
+static struct ServerReply *ServerReplyFind(Window w, enum ServerReplyOp op);
+static int	AppendPropCarefully(Display *display, Window window, Atom property, char_u *value, int length);
+static int	x_error_check(Display *dpy, XErrorEvent *error_event);
+static int	IsSerialName(char_u *name);
+static void	save_in_queue(char_u *buf, long_u len);
+static void	server_parse_message(Display *dpy, char_u *propInfo, long_u numItems);
 
 /* Private variables for the "server" functionality */
 static Atom	registryProperty = None;
@@ -199,9 +214,9 @@ static char_u	*empty_prop = (char_u *)"";	/* empty GetRegProp() result */
  * Returns FAIL or OK.
  */
     int
-serverRegisterName(dpy, name)
-    Display	*dpy;		/* display to register with */
-    char_u	*name;		/* the name that will be used as a base */
+serverRegisterName(
+    Display	*dpy,		/* display to register with */
+    char_u	*name)		/* the name that will be used as a base */
 {
     int		i;
     int		res;
@@ -216,7 +231,7 @@ serverRegisterName(dpy, name)
 	    if (res < -1 || i >= 1000)
 	    {
 		MSG_ATTR(_("Unable to register a command server name"),
-							      hl_attr(HLF_W));
+							      HL_ATTR(HLF_W));
 		return FAIL;
 	    }
 	    if (p == NULL)
@@ -237,9 +252,7 @@ serverRegisterName(dpy, name)
 }
 
     static int
-DoRegisterName(dpy, name)
-    Display	*dpy;
-    char_u	*name;
+DoRegisterName(Display *dpy, char_u *name)
 {
     Window	w;
     XErrorHandler old_handler;
@@ -317,9 +330,9 @@ DoRegisterName(dpy, name)
  * Change any registered window ID.
  */
     void
-serverChangeRegisteredWindow(dpy, newwin)
-    Display	*dpy;		/* Display to register with */
-    Window	newwin;		/* Re-register to this ID */
+serverChangeRegisteredWindow(
+    Display	*dpy,		/* Display to register with */
+    Window	newwin)		/* Re-register to this ID */
 {
     char_u	propInfo[MAX_NAME_LENGTH + 20];
 
@@ -353,15 +366,15 @@ serverChangeRegisteredWindow(dpy, newwin)
  * Returns 0 for OK, negative for an error.
  */
     int
-serverSendToVim(dpy, name, cmd,  result, server, asExpr, localLoop, silent)
-    Display	*dpy;			/* Where to send. */
-    char_u	*name;			/* Where to send. */
-    char_u	*cmd;			/* What to send. */
-    char_u	**result;		/* Result of eval'ed expression */
-    Window	*server;		/* Actual ID of receiving app */
-    Bool	asExpr;			/* Interpret as keystrokes or expr ? */
-    Bool	localLoop;		/* Throw away everything but result */
-    int		silent;			/* don't complain about no server */
+serverSendToVim(
+    Display	*dpy,			/* Where to send. */
+    char_u	*name,			/* Where to send. */
+    char_u	*cmd,			/* What to send. */
+    char_u	**result,		/* Result of eval'ed expression */
+    Window	*server,		/* Actual ID of receiving app */
+    Bool	asExpr,			/* Interpret as keystrokes or expr ? */
+    Bool	localLoop,		/* Throw away everything but result */
+    int		silent)			/* don't complain about no server */
 {
     Window	    w;
     char_u	    *property;
@@ -386,27 +399,7 @@ serverSendToVim(dpy, name, cmd,  result, server, asExpr, localLoop, silent)
 
     /* Execute locally if no display or target is ourselves */
     if (dpy == NULL || (serverName != NULL && STRICMP(name, serverName) == 0))
-    {
-	if (asExpr)
-	{
-	    char_u *ret;
-
-	    ret = eval_client_expr_to_string(cmd);
-	    if (result != NULL)
-	    {
-		if (ret == NULL)
-		    *result = vim_strsave((char_u *)_(e_invexprmsg));
-		else
-		    *result = ret;
-	    }
-	    else
-		vim_free(ret);
-	    return ret == NULL ? -1 : 0;
-	}
-	else
-	    server_to_input_buf(cmd);
-	return 0;
-    }
+	return sendToLocalVim(cmd, asExpr, result);
 
     /*
      * Bind the server name to a communication window.
@@ -520,8 +513,7 @@ serverSendToVim(dpy, name, cmd,  result, server, asExpr, localLoop, silent)
 }
 
     static int
-WaitForPend(p)
-    void    *p;
+WaitForPend(void *p)
 {
     PendingCommand *pending = (PendingCommand *) p;
     return pending->result != NULL;
@@ -531,9 +523,7 @@ WaitForPend(p)
  * Return TRUE if window "w" exists and has a "Vim" property on it.
  */
     static int
-WindowValid(dpy, w)
-    Display     *dpy;
-    Window	w;
+WindowValid(Display *dpy, Window w)
 {
     XErrorHandler   old_handler;
     Atom	    *plist;
@@ -562,13 +552,13 @@ WindowValid(dpy, w)
  * Enter a loop processing X events & polling chars until we see a result
  */
     static void
-ServerWait(dpy, w, endCond, endData, localLoop, seconds)
-    Display	*dpy;
-    Window	w;
-    EndCond	endCond;
-    void	*endData;
-    int		localLoop;
-    int		seconds;
+ServerWait(
+    Display	*dpy,
+    Window	w,
+    EndCond	endCond,
+    void	*endData,
+    int		localLoop,
+    int		seconds)
 {
     time_t	    start;
     time_t	    now;
@@ -595,7 +585,8 @@ ServerWait(dpy, w, endCond, endData, localLoop, seconds)
     while (TRUE)
     {
 	while (XCheckWindowEvent(dpy, commWindow, PropertyChangeMask, &event))
-	    serverEventProc(dpy, &event);
+	    serverEventProc(dpy, &event, 1);
+	server_parse_messages();
 
 	if (endCond(endData) != 0)
 	    break;
@@ -604,6 +595,10 @@ ServerWait(dpy, w, endCond, endData, localLoop, seconds)
 	time(&now);
 	if (seconds >= 0 && (now - start) >= seconds)
 	    break;
+
+#ifdef FEAT_TIMERS
+	check_due_timer();
+#endif
 
 	/* Just look out for the answer without calling back into Vim */
 	if (localLoop)
@@ -634,8 +629,7 @@ ServerWait(dpy, w, endCond, endData, localLoop, seconds)
  * Returns a newline separated list in allocated memory or NULL.
  */
     char_u *
-serverGetVimNames(dpy)
-    Display	*dpy;
+serverGetVimNames(Display *dpy)
 {
     char_u	*regProp;
     char_u	*entry;
@@ -689,9 +683,7 @@ serverGetVimNames(dpy)
  */
 
     static struct ServerReply *
-ServerReplyFind(w, op)
-    Window  w;
-    enum ServerReplyOp op;
+ServerReplyFind(Window w, enum ServerReplyOp op)
 {
     struct ServerReply *p;
     struct ServerReply e;
@@ -733,8 +725,7 @@ ServerReplyFind(w, op)
  * Issue an error if the id is invalid.
  */
     Window
-serverStrToWin(str)
-    char_u  *str;
+serverStrToWin(char_u *str)
 {
     unsigned  id = None;
 
@@ -750,9 +741,7 @@ serverStrToWin(str)
  * Return -1 if the window is invalid.
  */
     int
-serverSendReply(name, str)
-    char_u	*name;
-    char_u	*str;
+serverSendReply(char_u *name, char_u *str)
 {
     char_u	*property;
     int		length;
@@ -792,10 +781,10 @@ serverSendReply(name, str)
 }
 
     static int
-WaitForReply(p)
-    void    *p;
+WaitForReply(void *p)
 {
     Window  *w = (Window *) p;
+
     return ServerReplyFind(*w, SROP_Find) != NULL;
 }
 
@@ -805,11 +794,11 @@ WaitForReply(p)
  * Return -1 if the window becomes invalid while waiting.
  */
     int
-serverReadReply(dpy, win, str, localLoop)
-    Display	*dpy;
-    Window	win;
-    char_u	**str;
-    int		localLoop;
+serverReadReply(
+    Display	*dpy,
+    Window	win,
+    char_u	**str,
+    int		localLoop)
 {
     int		len;
     char_u	*s;
@@ -843,10 +832,7 @@ serverReadReply(dpy, win, str, localLoop)
  * Return TRUE and a non-malloc'ed string if there is.  Else return FALSE.
  */
     int
-serverPeekReply(dpy, win, str)
-    Display *dpy;
-    Window win;
-    char_u **str;
+serverPeekReply(Display *dpy, Window win, char_u **str)
 {
     struct ServerReply *p;
 
@@ -867,8 +853,7 @@ serverPeekReply(dpy, win, str)
  * results.
  */
     static int
-SendInit(dpy)
-    Display *dpy;
+SendInit(Display *dpy)
 {
     XErrorHandler old_handler;
 
@@ -924,11 +909,11 @@ SendInit(dpy)
  *	removed from the registry property.
  */
     static Window
-LookupName(dpy, name, delete, loose)
-    Display	*dpy;	    /* Display whose registry to check. */
-    char_u	*name;	    /* Name of a server. */
-    int		delete;	    /* If non-zero, delete info about name. */
-    char_u	**loose;    /* Do another search matching -999 if not found
+LookupName(
+    Display	*dpy,	    /* Display whose registry to check. */
+    char_u	*name,	    /* Name of a server. */
+    int		delete,	    /* If non-zero, delete info about name. */
+    char_u	**loose)    /* Do another search matching -999 if not found
 			       Return result here if a match is found */
 {
     char_u	*regProp, *entry;
@@ -1018,9 +1003,9 @@ LookupName(dpy, name, delete, loose)
  * 3. The window will mistakenly be regarded valid because of own commWindow
  */
     static void
-DeleteAnyLingerer(dpy, win)
-    Display	*dpy;	/* Display whose registry to check. */
-    Window	win;	/* Window to remove */
+DeleteAnyLingerer(
+    Display	*dpy,	/* Display whose registry to check. */
+    Window	win)	/* Window to remove */
 {
     char_u	*regProp, *entry = NULL;
     char_u	*p;
@@ -1080,11 +1065,11 @@ DeleteAnyLingerer(dpy, win)
  * Return OK when successful.
  */
     static int
-GetRegProp(dpy, regPropp, numItemsp, domsg)
-    Display	*dpy;
-    char_u	**regPropp;
-    long_u	*numItemsp;
-    int		domsg;		/* When TRUE give error message. */
+GetRegProp(
+    Display	*dpy,
+    char_u	**regPropp,
+    long_u	*numItemsp,
+    int		domsg)		/* When TRUE give error message. */
 {
     int		result, actualFormat;
     long_u	bytesAfter;
@@ -1127,22 +1112,25 @@ GetRegProp(dpy, regPropp, numItemsp, domsg)
     return OK;
 }
 
+
 /*
  * This procedure is invoked by the various X event loops throughout Vims when
  * a property changes on the communication window.  This procedure reads the
- * property and handles command requests and responses.
+ * property and enqueues command requests and responses. If immediate is true,
+ * it runs the event immediatly instead of enqueuing it. Immediate can cause
+ * unintended behavior and should only be used for code that blocks for a
+ * response.
  */
     void
-serverEventProc(dpy, eventPtr)
-    Display	*dpy;
-    XEvent	*eventPtr;		/* Information about event. */
+serverEventProc(
+    Display	*dpy,
+    XEvent	*eventPtr,	/* Information about event. */
+    int		immediate)	/* Run event immediately. Should mostly be 0. */
 {
     char_u	*propInfo;
-    char_u	*p;
-    int		result, actualFormat, code;
+    int		result, actualFormat;
     long_u	numItems, bytesAfter;
     Atom	actualType;
-    char_u	*tofree;
 
     if (eventPtr != NULL)
     {
@@ -1168,6 +1156,84 @@ serverEventProc(dpy, eventPtr)
 	    XFree(propInfo);
 	return;
     }
+    if (immediate)
+	server_parse_message(dpy, propInfo, numItems);
+    else
+	save_in_queue(propInfo, numItems);
+}
+
+/*
+ * Saves x clientserver commands in a queue so that they can be called when
+ * vim is idle.
+ */
+    static void
+save_in_queue(char_u *propInfo, long_u len)
+{
+    x_queue_T *node;
+
+    node = (x_queue_T *)alloc(sizeof(x_queue_T));
+    if (node == NULL)
+	return;	    /* out of memory */
+    node->propInfo = propInfo;
+    node->len = len;
+
+    if (head.next == NULL)   /* initialize circular queue */
+    {
+	head.next = &head;
+	head.prev = &head;
+    }
+
+    /* insert node at tail of queue */
+    node->next = &head;
+    node->prev = head.prev;
+    head.prev->next = node;
+    head.prev = node;
+}
+
+/*
+ * Parses queued clientserver messages.
+ */
+    void
+server_parse_messages(void)
+{
+    x_queue_T	*node;
+
+    if (!X_DISPLAY)
+	return; /* cannot happen? */
+    while (head.next != NULL && head.next != &head)
+    {
+	node = head.next;
+	head.next = node->next;
+	node->next->prev = node->prev;
+	server_parse_message(X_DISPLAY, node->propInfo, node->len);
+	vim_free(node);
+    }
+}
+
+/*
+ * Returns a non-zero value if there are clientserver messages waiting
+ * int the queue.
+ */
+    int
+server_waiting(void)
+{
+    return head.next != NULL && head.next != &head;
+}
+
+/*
+ * Prases a single clientserver message. A single message may contain multiple
+ * commands.
+ * "propInfo" will be freed.
+ */
+    static void
+server_parse_message(
+    Display	*dpy,
+    char_u	*propInfo, /* A string containing 0 or more X commands */
+    long_u	numItems)  /* The size of propInfo in bytes. */
+{
+    char_u	*p;
+    int		code;
+    char_u	*tofree;
 
     /*
      * Several commands and results could arrive in the property at
@@ -1248,16 +1314,16 @@ serverEventProc(dpy, eventPtr)
 	    if (script == NULL || name == NULL)
 		continue;
 
-            if (serverName != NULL && STRICMP(name, serverName) == 0)
-            {
-                script = serverConvert(enc, script, &tofree);
-                if (asKeys)
-                    server_to_input_buf(script);
-                else
-                {
-                    char_u      *res;
+	    if (serverName != NULL && STRICMP(name, serverName) == 0)
+	    {
+		script = serverConvert(enc, script, &tofree);
+		if (asKeys)
+		    server_to_input_buf(script);
+		else
+		{
+		    char_u      *res;
 
-                    res = eval_client_expr_to_string(script);
+		    res = eval_client_expr_to_string(script);
 		    if (resWindow != None)
 		    {
 			garray_T    reply;
@@ -1290,10 +1356,10 @@ serverEventProc(dpy, eventPtr)
 						 reply.ga_data, reply.ga_len);
 			ga_clear(&reply);
 		    }
-                    vim_free(res);
-                }
-                vim_free(tofree);
-            }
+		    vim_free(res);
+		}
+		vim_free(tofree);
+	    }
 	}
 	else if (*p == 'r' && p[1] == 0)
 	{
@@ -1368,8 +1434,8 @@ serverEventProc(dpy, eventPtr)
 	    char_u	*enc;
 
 	    /*
-	     * This is a (n)otification.  Sent with serverreply_send in VimL.
-	     * Execute any autocommand and save it for later retrieval
+	     * This is a (n)otification.  Sent with serverreply_send in Vim
+	     * script.  Execute any autocommand and save it for later retrieval
 	     */
 	    p += 2;
 	    gotWindow = 0;
@@ -1441,12 +1507,12 @@ serverEventProc(dpy, eventPtr)
  * Return: 0 for OK, -1 for error
  */
     static int
-AppendPropCarefully(dpy, window, property, value, length)
-    Display	*dpy;		/* Display on which to operate. */
-    Window	window;		/* Window whose property is to be modified. */
-    Atom	property;	/* Name of property. */
-    char_u	*value;		/* Characters  to append to property. */
-    int		length;		/* How much to append */
+AppendPropCarefully(
+    Display	*dpy,		/* Display on which to operate. */
+    Window	window,		/* Window whose property is to be modified. */
+    Atom	property,	/* Name of property. */
+    char_u	*value,		/* Characters  to append to property. */
+    int		length)		/* How much to append */
 {
     XErrorHandler old_handler;
 
@@ -1464,9 +1530,7 @@ AppendPropCarefully(dpy, window, property, value, length)
  * Another X Error handler, just used to check for errors.
  */
     static int
-x_error_check(dpy, error_event)
-    Display	*dpy UNUSED;
-    XErrorEvent	*error_event UNUSED;
+x_error_check(Display *dpy UNUSED, XErrorEvent *error_event UNUSED)
 {
     got_x_error = TRUE;
     return 0;
@@ -1477,8 +1541,7 @@ x_error_check(dpy, error_event)
  * Actually just checks if the name ends in a digit.
  */
     static int
-IsSerialName(str)
-    char_u	*str;
+IsSerialName(char_u *str)
 {
     int len = STRLEN(str);
 
