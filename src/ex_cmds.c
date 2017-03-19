@@ -799,16 +799,8 @@ do_move(linenr_T line1, linenr_T line2, linenr_T dest)
     linenr_T	num_lines;  /* Num lines moved */
     linenr_T	last_line;  /* Last line in file after adding new text */
 #ifdef FEAT_FOLDING
-    int		isFolded;
     win_T	*win;
     tabpage_T	*tp;
-
-    /* Moving lines seems to corrupt the folds, delete folding info now
-     * and recreate it when finished.  Don't do this for manual folding, it
-     * would delete all folds. */
-    isFolded = hasAnyFolding(curwin) && !foldmethodIsManual(curwin);
-    if (isFolded)
-	deleteFoldRecurse(&curwin->w_folds);
 #endif
 
     if (dest >= line1 && dest < line2)
@@ -917,12 +909,6 @@ do_move(linenr_T line1, linenr_T line2, linenr_T dest)
     }
     else
 	changed_lines(dest + 1, 0, line1 + num_lines, 0L);
-
-#ifdef FEAT_FOLDING
-    /* recreate folds */
-    if (isFolded)
-	foldUpdateAll(curwin);
-#endif
 
     return OK;
 }
@@ -2903,7 +2889,7 @@ print_line_no_prefix(
     {
 	vim_snprintf((char *)numbuf, sizeof(numbuf),
 				   "%*ld ", number_width(curwin), (long)lnum);
-	msg_puts_attr(numbuf, hl_attr(HLF_N));	/* Highlight line nrs */
+	msg_puts_attr(numbuf, HL_ATTR(HLF_N));	/* Highlight line nrs */
     }
     msg_prt_line(ml_get(lnum), list);
 }
@@ -5393,7 +5379,7 @@ do_sub(exarg_T *eap)
 			    msg_no_more = TRUE;
 			    /* write message same highlighting as for
 			     * wait_return */
-			    smsg_attr(hl_attr(HLF_R),
+			    smsg_attr(HL_ATTR(HLF_R),
 				    (char_u *)_("replace with %s (y/n/a/q/l/^E/^Y)?"), sub);
 			    msg_no_more = FALSE;
 			    msg_scroll = i;
@@ -8298,7 +8284,7 @@ ex_smile(exarg_T *eap UNUSED)
 	    else
 		for (n = *p++; n > 0; --n)
 		    if (*p == 'o' || *p == '$')
-			msg_putchar_attr(*p, hl_attr(HLF_L));
+			msg_putchar_attr(*p, HL_ATTR(HLF_L));
 		    else
 			msg_putchar(*p);
     msg_clr_eos();
