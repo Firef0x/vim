@@ -158,6 +158,13 @@ static qf_info_T *ll_get_or_alloc_list(win_T *);
 #define GET_LOC_LIST(wp) (IS_LL_WINDOW(wp) ? wp->w_llist_ref : wp->w_llist)
 
 /*
+ * Looking up a buffer can be slow if there are many.  Remember the last one
+ * to make this a lot faster if there are multiple matches in the same file.
+ */
+static char_u *qf_last_bufname = NULL;
+static bufref_T  qf_last_bufref = {NULL, 0};
+
+/*
  * Read the errorfile "efile" into memory, line by line, building the error
  * list. Set the error list's title to qf_title.
  * Return -1 for error, number of errors for success.
@@ -1151,6 +1158,10 @@ qf_init_ext(
     int		    retval = -1;	/* default: return error flag */
     int		    status;
 
+    /* Do not used the cached buffer, it may have been wiped out. */
+    vim_free(qf_last_bufname);
+    qf_last_bufname = NULL;
+
     vim_memset(&state, 0, sizeof(state));
     vim_memset(&fields, 0, sizeof(fields));
 #ifdef FEAT_MBYTE
@@ -1658,13 +1669,6 @@ copy_loclist(win_T *from, win_T *to)
 
     to->w_llist->qf_curlist = qi->qf_curlist;	/* current list */
 }
-
-/*
- * Looking up a buffer can be slow if there are many.  Remember the last one
- * to make this a lot faster if there are multiple matches in the same file.
- */
-static char_u *qf_last_bufname = NULL;
-static bufref_T  qf_last_bufref = {NULL, 0};
 
 /*
  * Get buffer number for file "directory/fname".
@@ -4877,7 +4881,9 @@ qf_set_properties(qf_info_T *qi, dict_T *what, int action)
 	/* Use the specified quickfix/location list */
 	if (di->di_tv.v_type == VAR_NUMBER)
 	{
-	    qf_idx = di->di_tv.vval.v_number - 1;
+	    /* for zero use the current list */
+	    if (di->di_tv.vval.v_number != 0)
+		qf_idx = di->di_tv.vval.v_number - 1;
 	    if (qf_idx < 0 || qf_idx >= qi->qf_listcount)
 		return FAIL;
 	}
@@ -4908,11 +4914,11 @@ qf_set_properties(qf_info_T *qi, dict_T *what, int action)
     if ((di = dict_find(what, (char_u *)"context", -1)) != NULL)
     {
 	typval_T	*ctx;
-	free_tv(qi->qf_lists[qi->qf_curlist].qf_ctx);
+	free_tv(qi->qf_lists[qf_idx].qf_ctx);
 	ctx =  alloc_tv();
 	if (ctx != NULL)
 	    copy_tv(&di->di_tv, ctx);
-	qi->qf_lists[qi->qf_curlist].qf_ctx = ctx;
+	qi->qf_lists[qf_idx].qf_ctx = ctx;
     }
 
     return retval;
