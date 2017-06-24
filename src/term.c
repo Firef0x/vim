@@ -1801,9 +1801,8 @@ set_termname(char_u *term)
      * The termcode for the mouse is added as a side effect in option.c.
      */
     {
-	char_u	*p;
+	char_u	*p = (char_u *)"";
 
-	p = (char_u *)"";
 #  ifdef FEAT_MOUSE_XTERM
 	if (use_xterm_like_mouse(term))
 	{
@@ -1944,6 +1943,7 @@ set_termname(char_u *term)
 #  define HMT_PTERM	16
 #  define HMT_URXVT	32
 #  define HMT_SGR	64
+#  define HMT_SGR_REL	128
 static int has_mouse_termcode = 0;
 # endif
 
@@ -1987,6 +1987,8 @@ set_mouse_termcode(
 #   ifdef FEAT_MOUSE_SGR
     if (n == KS_SGR_MOUSE)
 	has_mouse_termcode |= HMT_SGR;
+    else if (n == KS_SGR_MOUSE_RELEASE)
+	has_mouse_termcode |= HMT_SGR_REL;
     else
 #   endif
 	has_mouse_termcode |= HMT_NORMAL;
@@ -2034,6 +2036,8 @@ del_mouse_termcode(
 #   ifdef FEAT_MOUSE_SGR
     if (n == KS_SGR_MOUSE)
 	has_mouse_termcode &= ~HMT_SGR;
+    else if (n == KS_SGR_MOUSE_RELEASE)
+	has_mouse_termcode &= ~HMT_SGR_REL;
     else
 #   endif
 	has_mouse_termcode &= ~HMT_NORMAL;
@@ -3940,7 +3944,7 @@ check_termcode(
     int		offset;
     char_u	key_name[2];
     int		modifiers;
-    char_u	*modifiers_start;
+    char_u	*modifiers_start = NULL;
     int		key;
     int		new_slen;
     int		extra;
@@ -4597,59 +4601,54 @@ check_termcode(
 		|| key_name[0] == KS_SGR_MOUSE
 		|| key_name[0] == KS_SGR_MOUSE_RELEASE)
 	    {
-		for (;;)
-		{
-		    /* URXVT 1015 mouse reporting mode:
-		     * Almost identical to xterm mouse mode, except the values
-		     * are decimal instead of bytes.
-		     *
-		     * \033[%d;%d;%dM
-		     *		  ^-- row
-		     *	       ^----- column
-		     *	    ^-------- code
-		     *
-		     * SGR 1006 mouse reporting mode:
-		     * Almost identical to xterm mouse mode, except the values
-		     * are decimal instead of bytes.
-		     *
-		     * \033[<%d;%d;%dM
-		     *		   ^-- row
-		     *	        ^----- column
-		     *	     ^-------- code
-		     *
-		     * \033[<%d;%d;%dm        : mouse release event
-		     *		   ^-- row
-		     *	        ^----- column
-		     *	     ^-------- code
-		     */
-		    p = modifiers_start;
-		    if (p == NULL)
-			return -1;
+		/* URXVT 1015 mouse reporting mode:
+		 * Almost identical to xterm mouse mode, except the values
+		 * are decimal instead of bytes.
+		 *
+		 * \033[%d;%d;%dM
+		 *		  ^-- row
+		 *	       ^----- column
+		 *	    ^-------- code
+		 *
+		 * SGR 1006 mouse reporting mode:
+		 * Almost identical to xterm mouse mode, except the values
+		 * are decimal instead of bytes.
+		 *
+		 * \033[<%d;%d;%dM
+		 *		   ^-- row
+		 *	        ^----- column
+		 *	     ^-------- code
+		 *
+		 * \033[<%d;%d;%dm        : mouse release event
+		 *		   ^-- row
+		 *	        ^----- column
+		 *	     ^-------- code
+		 */
+		p = modifiers_start;
+		if (p == NULL)
+		    return -1;
 
-		    mouse_code = getdigits(&p);
-		    if (*p++ != ';')
-			return -1;
+		mouse_code = getdigits(&p);
+		if (*p++ != ';')
+		    return -1;
 
-		    /* when mouse reporting is SGR, add 32 to mouse code */
-		    if (key_name[0] == KS_SGR_MOUSE
-					|| key_name[0] == KS_SGR_MOUSE_RELEASE)
-			mouse_code += 32;
+		/* when mouse reporting is SGR, add 32 to mouse code */
+		if (key_name[0] == KS_SGR_MOUSE
+				    || key_name[0] == KS_SGR_MOUSE_RELEASE)
+		    mouse_code += 32;
 
-		    if (key_name[0] == KS_SGR_MOUSE_RELEASE)
-			mouse_code |= MOUSE_RELEASE;
+		if (key_name[0] == KS_SGR_MOUSE_RELEASE)
+		    mouse_code |= MOUSE_RELEASE;
 
-		    mouse_col = getdigits(&p) - 1;
-		    if (*p++ != ';')
-			return -1;
+		mouse_col = getdigits(&p) - 1;
+		if (*p++ != ';')
+		    return -1;
 
-		    mouse_row = getdigits(&p) - 1;
+		mouse_row = getdigits(&p) - 1;
 
-		    /* The modifiers were the mouse coordinates, not the
-		     * modifier keys (alt/shift/ctrl/meta) state. */
-		    modifiers = 0;
-
-		    break;
-		}
+		/* The modifiers were the mouse coordinates, not the
+		 * modifier keys (alt/shift/ctrl/meta) state. */
+		modifiers = 0;
 	    }
 # endif
 
