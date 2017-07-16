@@ -126,13 +126,6 @@ static void copy_text_attr(int off, char_u *buf, int len, int attr);
 #endif
 static int win_line(win_T *, linenr_T, int, int, int nochange, proftime_T *syntax_tm);
 static int char_needs_redraw(int off_from, int off_to, int cols);
-#ifdef FEAT_RIGHTLEFT
-static void screen_line(int row, int coloff, int endcol, int clear_width, int rlflag);
-# define SCREEN_LINE(r, o, e, c, rl)    screen_line((r), (o), (e), (c), (rl))
-#else
-static void screen_line(int row, int coloff, int endcol, int clear_width);
-# define SCREEN_LINE(r, o, e, c, rl)    screen_line((r), (o), (e), (c))
-#endif
 #ifdef FEAT_WINDOWS
 static void draw_vsep_win(win_T *wp, int row);
 #endif
@@ -188,6 +181,12 @@ static int screen_char_attr = 0;
 #if defined(FEAT_SYN_HL) && defined(FEAT_RELTIME)
 /* Can limit syntax highlight time to 'redrawtime'. */
 # define SYN_TIME_LIMIT 1
+#endif
+
+#ifdef FEAT_RIGHTLEFT
+# define HAS_RIGHTLEFT(x) x
+#else
+# define HAS_RIGHTLEFT(x) FALSE
 #endif
 
 /*
@@ -411,7 +410,7 @@ redraw_asap(int type)
 				screenline2 + r * cols,
 				(size_t)cols * sizeof(schar_T));
 #endif
-		SCREEN_LINE(cmdline_row + r, 0, cols, cols, FALSE);
+		screen_line(cmdline_row + r, 0, cols, cols, FALSE);
 	    }
 	    ret = 4;
 	}
@@ -1187,6 +1186,17 @@ win_update(win_T *wp)
     {
 	/* draw the vertical separator right of this window */
 	draw_vsep_win(wp, 0);
+	wp->w_redr_type = 0;
+	return;
+    }
+#endif
+
+#ifdef FEAT_TERMINAL
+    if (wp->w_buffer->b_term != NULL)
+    {
+	/* This window contains a terminal, redraw works completely
+	 * differently. */
+	term_update_window(wp);
 	wp->w_redr_type = 0;
 	return;
     }
@@ -2886,7 +2896,7 @@ fold_line(
     }
 #endif
 
-    SCREEN_LINE(row + W_WINROW(wp), W_WINCOL(wp), (int)W_WIDTH(wp),
+    screen_line(row + W_WINROW(wp), W_WINCOL(wp), (int)W_WIDTH(wp),
 						     (int)W_WIDTH(wp), FALSE);
 
     /*
@@ -3996,8 +4006,8 @@ win_line(
 #endif
 		)
 	{
-	    SCREEN_LINE(screen_row, W_WINCOL(wp), col, -(int)W_WIDTH(wp),
-								  wp->w_p_rl);
+	    screen_line(screen_row, W_WINCOL(wp), col, -(int)W_WIDTH(wp),
+						    HAS_RIGHTLEFT(wp->w_p_rl));
 	    /* Pretend we have finished updating the window.  Except when
 	     * 'cursorcolumn' is set. */
 #ifdef FEAT_SYN_HL
@@ -5443,8 +5453,8 @@ win_line(
 	    }
 #endif
 
-	    SCREEN_LINE(screen_row, W_WINCOL(wp), col,
-						(int)W_WIDTH(wp), wp->w_p_rl);
+	    screen_line(screen_row, W_WINCOL(wp), col,
+				  (int)W_WIDTH(wp), HAS_RIGHTLEFT(wp->w_p_rl));
 	    row++;
 
 	    /*
@@ -5749,12 +5759,12 @@ win_line(
 		)
 	{
 #ifdef FEAT_CONCEAL
-	    SCREEN_LINE(screen_row, W_WINCOL(wp), col - boguscols,
-						(int)W_WIDTH(wp), wp->w_p_rl);
+	    screen_line(screen_row, W_WINCOL(wp), col - boguscols,
+				  (int)W_WIDTH(wp), HAS_RIGHTLEFT(wp->w_p_rl));
 	    boguscols = 0;
 #else
-	    SCREEN_LINE(screen_row, W_WINCOL(wp), col,
-						(int)W_WIDTH(wp), wp->w_p_rl);
+	    screen_line(screen_row, W_WINCOL(wp), col,
+				  (int)W_WIDTH(wp), HAS_RIGHTLEFT(wp->w_p_rl));
 #endif
 	    ++row;
 	    ++screen_row;
@@ -5959,6 +5969,17 @@ char_needs_redraw(int off_from, int off_to, int cols)
     return FALSE;
 }
 
+#if defined(FEAT_TERMINAL) || defined(PROTO)
+/*
+ * Return the index in ScreenLines[] for the current screen line.
+ */
+    int
+screen_get_current_line_off()
+{
+    return (int)(current_ScreenLine - ScreenLines);
+}
+#endif
+
 /*
  * Move one "cooked" screen line to the screen, but only the characters that
  * have actually changed.  Handle insert/delete character.
@@ -5970,16 +5991,13 @@ char_needs_redraw(int off_from, int off_to, int cols)
  *    When TRUE and "clear_width" > 0, clear columns 0 to "endcol"
  *    When FALSE and "clear_width" > 0, clear columns "endcol" to "clear_width"
  */
-    static void
+    void
 screen_line(
     int	    row,
     int	    coloff,
     int	    endcol,
-    int	    clear_width
-#ifdef FEAT_RIGHTLEFT
-    , int   rlflag
-#endif
-    )
+    int	    clear_width,
+    int	    rlflag UNUSED)
 {
     unsigned	    off_from;
     unsigned	    off_to;
