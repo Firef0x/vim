@@ -629,10 +629,13 @@ json_decode_item(js_read_T *reader, typval_T *res, int options)
 	    key = p = reader->js_buf + reader->js_used;
 	    while (*p != NUL && *p != ':' && *p > ' ')
 		++p;
-	    cur_item->v_type = VAR_STRING;
-	    cur_item->vval.v_string = vim_strnsave(key, (int)(p - key));
+	    if (cur_item != NULL)
+	    {
+		cur_item->v_type = VAR_STRING;
+		cur_item->vval.v_string = vim_strnsave(key, (int)(p - key));
+		top_item->jd_key = cur_item->vval.v_string;
+	    }
 	    reader->js_used += (int)(p - key);
-	    top_item->jd_key = cur_item->vval.v_string;
 	}
 	else
 	{
@@ -860,7 +863,7 @@ json_decode_item(js_read_T *reader, typval_T *res, int options)
 		    && cur_item != NULL)
 	    {
 		top_item->jd_key = get_tv_string_buf_chk(cur_item, key_buf);
-		if (top_item->jd_key == NULL || *top_item->jd_key == NUL)
+		if (top_item->jd_key == NULL)
 		{
 		    clear_tv(cur_item);
 		    EMSG(_(e_invarg));
@@ -1053,7 +1056,8 @@ json_decode(js_read_T *reader, typval_T *res, int options)
 
 /*
  * Decode the JSON from "reader" to find the end of the message.
- * "options" can be JSON_JS or zero;
+ * "options" can be JSON_JS or zero.
+ * This is only used for testing.
  * Return FAIL if the message has a decoding error.
  * Return MAYBE if the message is truncated, need to read more.
  * This only works reliable if the message contains an object, array or

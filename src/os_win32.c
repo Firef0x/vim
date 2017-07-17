@@ -515,6 +515,7 @@ static char *null_libintl_textdomain(const char *);
 static char *null_libintl_bindtextdomain(const char *, const char *);
 static char *null_libintl_bind_textdomain_codeset(const char *, const char *);
 static int null_libintl_putenv(const char *);
+static int null_libintl_wputenv(const wchar_t *);
 
 static HINSTANCE hLibintlDLL = NULL;
 char *(*dyn_libintl_gettext)(const char *) = null_libintl_gettext;
@@ -526,6 +527,7 @@ char *(*dyn_libintl_bindtextdomain)(const char *, const char *)
 char *(*dyn_libintl_bind_textdomain_codeset)(const char *, const char *)
 				       = null_libintl_bind_textdomain_codeset;
 int (*dyn_libintl_putenv)(const char *) = null_libintl_putenv;
+int (*dyn_libintl_wputenv)(const wchar_t *) = null_libintl_wputenv;
 
     int
 dyn_libintl_init(void)
@@ -591,9 +593,14 @@ dyn_libintl_init(void)
     /* _putenv() function for the libintl.dll is optional. */
     hmsvcrt = find_imported_module_by_funcname(hLibintlDLL, "getenv");
     if (hmsvcrt != NULL)
+    {
 	dyn_libintl_putenv = (void *)GetProcAddress(hmsvcrt, "_putenv");
-    if (dyn_libintl_putenv == NULL || dyn_libintl_putenv == putenv)
+	dyn_libintl_wputenv = (void *)GetProcAddress(hmsvcrt, "_wputenv");
+    }
+    if (dyn_libintl_putenv == NULL || dyn_libintl_putenv == _putenv)
 	dyn_libintl_putenv = null_libintl_putenv;
+    if (dyn_libintl_wputenv == NULL || dyn_libintl_wputenv == _wputenv)
+	dyn_libintl_wputenv = null_libintl_wputenv;
 
     return 1;
 }
@@ -610,16 +617,15 @@ dyn_libintl_end(void)
     dyn_libintl_bindtextdomain	= null_libintl_bindtextdomain;
     dyn_libintl_bind_textdomain_codeset = null_libintl_bind_textdomain_codeset;
     dyn_libintl_putenv		= null_libintl_putenv;
+    dyn_libintl_wputenv		= null_libintl_wputenv;
 }
 
-/*ARGSUSED*/
     static char *
 null_libintl_gettext(const char *msgid)
 {
     return (char*)msgid;
 }
 
-/*ARGSUSED*/
     static char *
 null_libintl_ngettext(
 	const char *msgid,
@@ -629,31 +635,36 @@ null_libintl_ngettext(
     return (char *)(n == 1 ? msgid : msgid_plural);
 }
 
-/*ARGSUSED*/
     static char *
-null_libintl_bindtextdomain(const char *domainname, const char *dirname)
+null_libintl_bindtextdomain(
+	const char *domainname UNUSED,
+	const char *dirname UNUSED)
 {
     return NULL;
 }
 
-/*ARGSUSED*/
     static char *
-null_libintl_bind_textdomain_codeset(const char *domainname,
-							  const char *codeset)
+null_libintl_bind_textdomain_codeset(
+	const char *domainname UNUSED,
+	const char *codeset UNUSED)
 {
     return NULL;
 }
 
-/*ARGSUSED*/
     static char *
-null_libintl_textdomain(const char *domainname)
+null_libintl_textdomain(const char *domainname UNUSED)
 {
     return NULL;
 }
 
-/*ARGSUSED*/
     int
-null_libintl_putenv(const char *envstring)
+null_libintl_putenv(const char *envstring UNUSED)
+{
+    return 0;
+}
+
+    int
+null_libintl_wputenv(const wchar_t *envstring UNUSED)
 {
     return 0;
 }
@@ -1045,9 +1056,8 @@ decode_key_event(
  * For the GUI the mouse handling is in gui_w32.c.
  */
 # ifdef FEAT_GUI_W32
-/*ARGSUSED*/
     void
-mch_setmouse(int on)
+mch_setmouse(int on UNUSED)
 {
 }
 # else
@@ -1457,6 +1467,12 @@ WaitForChar(long msec)
 		    dwWaitTime = 10;
 	    }
 #endif
+#ifdef FEAT_BEVAL
+	    if (p_beval && dwWaitTime > 100)
+		/* The 'balloonexpr' may indirectly invoke a callback while
+		 * waiting for a character, need to check often. */
+		dwWaitTime = 100;
+#endif
 #ifdef FEAT_MZSCHEME
 	    if (mzthreads_allowed() && p_mzq > 0
 				    && (msec < 0 || (long)dwWaitTime > p_mzq))
@@ -1643,13 +1659,12 @@ tgetch(int *pmodifiers, WCHAR *pch2)
  * If time == -1, wait forever for characters.
  * Returns the number of characters read into buf.
  */
-/*ARGSUSED*/
     int
 mch_inchar(
-    char_u	*buf,
-    int		maxlen,
-    long	time,
-    int		tb_change_cnt)
+    char_u	*buf UNUSED,
+    int		maxlen UNUSED,
+    long	time UNUSED,
+    int		tb_change_cnt UNUSED)
 {
 #ifndef FEAT_GUI_W32	    /* this isn't used for the GUI */
 
@@ -1887,16 +1902,35 @@ theend:
 #endif
 
 /*
- * Return TRUE if "name" is in $PATH.
+ * If "use_path" is TRUE: Return TRUE if "name" is in $PATH.
+ * If "use_path" is FALSE: Return TRUE if "name" exists.
+ * When returning TRUE and "path" is not NULL save the path and set "*path" to
+ * the allocated memory.
  * TODO: Should somehow check if it's really executable.
  */
     static int
-executable_exists(char *name, char_u **path)
+executable_exists(char *name, char_u **path, int use_path)
 {
     char	*dum;
     char	fname[_MAX_PATH];
     char	*curpath, *newpath;
     long	n;
+
+    if (!use_path)
+    {
+	if (mch_getperm((char_u *)name) != -1 && !mch_isdir((char_u *)name))
+	{
+	    if (path != NULL)
+	    {
+		if (mch_isFullName((char_u *)name))
+		    *path = vim_strsave((char_u *)name);
+		else
+		    *path = FullName_save((char_u *)name, FALSE);
+	    }
+	    return TRUE;
+	}
+	return FALSE;
+    }
 
 #ifdef FEAT_MBYTE
     if (enc_codepage >= 0 && (int)GetACP() != enc_codepage)
@@ -2023,7 +2057,7 @@ mch_init(void)
 	    vimrun_path = (char *)vim_strsave(vimrun_location);
 	    s_dont_use_vimrun = FALSE;
 	}
-	else if (executable_exists("vimrun.exe", NULL))
+	else if (executable_exists("vimrun.exe", NULL, TRUE))
 	    s_dont_use_vimrun = FALSE;
 
 	/* Don't give the warning for a missing vimrun.exe right now, but only
@@ -2037,7 +2071,7 @@ mch_init(void)
      * If "finstr.exe" doesn't exist, use "grep -n" for 'grepprg'.
      * Otherwise the default "findstr /n" is used.
      */
-    if (!executable_exists("findstr.exe", NULL))
+    if (!executable_exists("findstr.exe", NULL, TRUE))
 	set_option_value((char_u *)"grepprg", 0, (char_u *)"grep -n", 0);
 
 #ifdef FEAT_CLIPBOARD
@@ -2529,8 +2563,9 @@ mch_init(void)
     void
 mch_exit(int r)
 {
-    stoptermcap();
+    exiting = TRUE;
 
+    stoptermcap();
     if (g_fWindInitCalled)
 	settmode(TMODE_COOK);
 
@@ -2577,11 +2612,10 @@ mch_exit(int r)
 /*
  * Do we have an interactive window?
  */
-/*ARGSUSED*/
     int
 mch_check_win(
-    int argc,
-    char **argv)
+    int argc UNUSED,
+    char **argv UNUSED)
 {
     get_exe_name();
 
@@ -3343,9 +3377,10 @@ mch_writable(char_u *name)
 }
 
 /*
- * Return 1 if "name" can be executed, 0 if not.
+ * Return TRUE if "name" can be executed, FALSE if not.
  * If "use_path" is FALSE only check if "name" is executable.
- * Return -1 if unknown.
+ * When returning TRUE and "path" is not NULL save the path and set "*path" to
+ * the allocated memory.
  */
     int
 mch_can_exe(char_u *name, char_u **path, int use_path)
@@ -3356,17 +3391,12 @@ mch_can_exe(char_u *name, char_u **path, int use_path)
 
     if (len >= _MAX_PATH)	/* safety check */
 	return FALSE;
-    if (!use_path)
-    {
-	/* TODO: check if file is really executable. */
-	return mch_getperm(name) != -1 && !mch_isdir(name);
-    }
 
     /* If there already is an extension try using the name directly.  Also do
      * this with a Unix-shell like 'shell'. */
     if (vim_strchr(gettail(name), '.') != NULL
 			       || strstr((char *)gettail(p_sh), "sh") != NULL)
-	if (executable_exists((char *)name, path))
+	if (executable_exists((char *)name, path, use_path))
 	    return TRUE;
 
     /*
@@ -3388,7 +3418,7 @@ mch_can_exe(char_u *name, char_u **path, int use_path)
 	}
 	else
 	    copy_option_part(&p, buf + len, _MAX_PATH - len, ";");
-	if (executable_exists((char *)buf, path))
+	if (executable_exists((char *)buf, path, use_path))
 	    return TRUE;
     }
     return FALSE;
@@ -3975,6 +4005,28 @@ vim_create_process(
 	NULL,			/* Current directory */
 	si,			/* Startup information */
 	pi);			/* Process information */
+}
+
+
+    static HINSTANCE
+vim_shell_execute(
+    char *cmd,
+    INT	 n_show_cmd)
+{
+#ifdef FEAT_MBYTE
+    if (enc_codepage >= 0 && (int)GetACP() != enc_codepage)
+    {
+	WCHAR *wcmd = enc_to_utf16((char_u *)cmd, NULL);
+	if (wcmd != NULL)
+	{
+	    HINSTANCE ret;
+	    ret = ShellExecuteW(NULL, NULL, wcmd, NULL, NULL, n_show_cmd);
+	    vim_free(wcmd);
+	    return ret;
+	}
+    }
+#endif
+    return ShellExecute(NULL, NULL, cmd, NULL, NULL, n_show_cmd);
 }
 
 
@@ -4684,11 +4736,12 @@ mch_call_shell(
 	if (*cmdbase == '(')
 	    ++cmdbase;
 
-	if ((STRNICMP(cmdbase, "start", 5) == 0) && vim_iswhite(cmdbase[5]))
+	if ((STRNICMP(cmdbase, "start", 5) == 0) && VIM_ISWHITE(cmdbase[5]))
 	{
 	    STARTUPINFO		si;
 	    PROCESS_INFORMATION	pi;
 	    DWORD		flags = CREATE_NEW_CONSOLE;
+	    INT			n_show_cmd = SW_SHOWNORMAL;
 	    char_u		*p;
 
 	    ZeroMemory(&si, sizeof(si));
@@ -4702,14 +4755,15 @@ mch_call_shell(
 
 	    cmdbase = skipwhite(cmdbase + 5);
 	    if ((STRNICMP(cmdbase, "/min", 4) == 0)
-		    && vim_iswhite(cmdbase[4]))
+		    && VIM_ISWHITE(cmdbase[4]))
 	    {
 		cmdbase = skipwhite(cmdbase + 4);
 		si.dwFlags = STARTF_USESHOWWINDOW;
 		si.wShowWindow = SW_SHOWMINNOACTIVE;
+		n_show_cmd = SW_SHOWMINNOACTIVE;
 	    }
 	    else if ((STRNICMP(cmdbase, "/b", 2) == 0)
-		    && vim_iswhite(cmdbase[2]))
+		    && VIM_ISWHITE(cmdbase[2]))
 	    {
 		cmdbase = skipwhite(cmdbase + 2);
 		flags = CREATE_NO_WINDOW;
@@ -4777,6 +4831,9 @@ mch_call_shell(
 	     * files if we exit before the spawned process
 	     */
 	    if (vim_create_process((char *)newcmd, FALSE, flags, &si, &pi))
+		x = 0;
+	    else if (vim_shell_execute((char *)newcmd, n_show_cmd)
+							       > (HINSTANCE)32)
 		x = 0;
 	    else
 	    {
@@ -5341,11 +5398,10 @@ termcap_mode_end(void)
 
 
 #ifdef FEAT_GUI_W32
-/*ARGSUSED*/
     void
 mch_write(
-    char_u  *s,
-    int	    len)
+    char_u  *s UNUSED,
+    int	    len UNUSED)
 {
     /* never used */
 }
@@ -5720,7 +5776,7 @@ write_chars(
 	{
 	    char_u *p = pchBuf;
 	    for (n = 0; n < cchwritten; n++)
-		mb_cptr_adv(p);
+		MB_CPTR_ADV(p);
 	    written = p - pchBuf;
 	    g_coord.X += (SHORT)mb_string2cells(pchBuf, written);
 	}
@@ -6043,11 +6099,10 @@ mch_write(
 /*
  * Delay for "msec" milliseconds.
  */
-/*ARGSUSED*/
     void
 mch_delay(
     long    msec,
-    int	    ignoreinput)
+    int	    ignoreinput UNUSED)
 {
 #ifdef FEAT_GUI_W32
     Sleep((int)msec);	    /* never wait for input */
@@ -6136,9 +6191,8 @@ mch_breakcheck(int force)
 /*
  * How much main memory in KiB that can be used by VIM.
  */
-/*ARGSUSED*/
     long_u
-mch_total_mem(int special)
+mch_total_mem(int special UNUSED)
 {
 	MEMORYSTATUSEX  ms;
 
@@ -6993,3 +7047,43 @@ fix_arg_enc(void)
     set_alist_count();
 }
 #endif
+
+    int
+mch_setenv(char *var, char *value, int x)
+{
+    char_u	*envbuf;
+
+    envbuf = alloc((unsigned)(STRLEN(var) + STRLEN(value) + 2));
+    if (envbuf == NULL)
+	return -1;
+
+    sprintf((char *)envbuf, "%s=%s", var, value);
+
+#ifdef FEAT_MBYTE
+    if (enc_codepage >= 0 && (int)GetACP() != enc_codepage)
+    {
+	WCHAR	    *p = enc_to_utf16(envbuf, NULL);
+
+	vim_free(envbuf);
+	if (p == NULL)
+	    return -1;
+	_wputenv(p);
+# ifdef libintl_wputenv
+	libintl_wputenv(p);
+# endif
+	/* Unlike Un*x systems, we can free the string for _wputenv(). */
+	vim_free(p);
+    }
+    else
+#endif
+    {
+	_putenv((char *)envbuf);
+# ifdef libintl_putenv
+	libintl_putenv((char *)envbuf);
+# endif
+	/* Unlike Un*x systems, we can free the string for _putenv(). */
+	vim_free(envbuf);
+    }
+
+    return 0;
+}

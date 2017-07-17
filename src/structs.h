@@ -68,12 +68,15 @@ typedef struct wininfo_S	wininfo_T;
 typedef struct frame_S		frame_T;
 typedef int			scid_T;		/* script ID */
 typedef struct file_buffer	buf_T;  /* forward declaration */
+typedef struct terminal_S	term_T;
 
-/* Reference to a buffer that stores the value of buf_free_count.
+/*
+ * Reference to a buffer that stores the value of buf_free_count.
  * bufref_valid() only needs to check "buf" when the count differs.
  */
 typedef struct {
     buf_T   *br_buf;
+    int	    br_fnum;
     int	    br_buf_free_count;
 } bufref_T;
 
@@ -265,6 +268,12 @@ typedef struct
 #ifdef FEAT_SIGNS
     char_u	*wo_scl;
 # define w_p_scl w_onebuf_opt.wo_scl	/* 'signcolumn' */
+#endif
+#ifdef FEAT_TERMINAL
+    char_u	*wo_tk;
+#define w_p_tk w_onebuf_opt.wo_tk	/* 'termkey' */
+    char_u	*wo_tms;
+#define w_p_tms w_onebuf_opt.wo_tms	/* 'termsize' */
 #endif
 
 #ifdef FEAT_EVAL
@@ -514,6 +523,12 @@ struct buffheader
     int		bh_index;	/* index for reading */
     int		bh_space;	/* space in bh_curr for appending */
 };
+
+typedef struct
+{
+    buffheader_T sr_redobuff;
+    buffheader_T sr_old_redobuff;
+} save_redo_T;
 
 /*
  * used for completion on the command line
@@ -1133,25 +1148,43 @@ typedef long_u hash_T;		/* Type for hi_hash */
 #  ifdef PROTO
 typedef long		    varnumber_T;
 typedef unsigned long	    uvarnumber_T;
+#define VARNUM_MIN	    LONG_MIN
+#define VARNUM_MAX	    LONG_MAX
+#define UVARNUM_MAX	    ULONG_MAX
 #  else
 typedef __int64		    varnumber_T;
 typedef unsigned __int64    uvarnumber_T;
+#define VARNUM_MIN	    _I64_MIN
+#define VARNUM_MAX	    _I64_MAX
+#define UVARNUM_MAX	    _UI64_MAX
 #  endif
 # elif defined(HAVE_STDINT_H)
 typedef int64_t		    varnumber_T;
 typedef uint64_t	    uvarnumber_T;
+#define VARNUM_MIN	    INT64_MIN
+#define VARNUM_MAX	    INT64_MAX
+#define UVARNUM_MAX	    UINT64_MAX
 # else
 typedef long		    varnumber_T;
 typedef unsigned long	    uvarnumber_T;
+#define VARNUM_MIN	    LONG_MIN
+#define VARNUM_MAX	    LONG_MAX
+#define UVARNUM_MAX	    ULONG_MAX
 # endif
 #else
 /* Use 32-bit Number. */
 # if VIM_SIZEOF_INT <= 3	/* use long if int is smaller than 32 bits */
 typedef long		    varnumber_T;
 typedef unsigned long	    uvarnumber_T;
+#define VARNUM_MIN	    LONG_MIN
+#define VARNUM_MAX	    LONG_MAX
+#define UVARNUM_MAX	    ULONG_MAX
 # else
 typedef int		    varnumber_T;
 typedef unsigned int	    uvarnumber_T;
+#define VARNUM_MIN	    INT_MIN
+#define VARNUM_MAX	    INT_MAX
+#define UVARNUM_MAX	    UINT_MAX
 # endif
 #endif
 
@@ -1319,6 +1352,7 @@ typedef struct
     int		uf_varargs;	/* variable nr of arguments */
     int		uf_flags;
     int		uf_calls;	/* nr of active calls */
+    int		uf_cleared;	/* func_clear() was already called */
     garray_T	uf_args;	/* arguments */
     garray_T	uf_lines;	/* function lines */
 #ifdef FEAT_PROFILE
@@ -1544,9 +1578,11 @@ typedef struct {
     jsonq_T	ch_json_head;	/* header for circular json read queue */
     int		ch_block_id;	/* ID that channel_read_json_block() is
 				   waiting for */
-    /* When ch_waiting is TRUE use ch_deadline to wait for incomplete message
-     * to be complete. */
-    int		ch_waiting;
+    /* When ch_wait_len is non-zero use ch_deadline to wait for incomplete
+     * message to be complete. The value is the length of the incomplete
+     * message when the deadline was set.  If it gets longer (something was
+     * received) the deadline is reset. */
+    size_t	ch_wait_len;
 #ifdef WIN32
     DWORD	ch_deadline;
 #else
@@ -1768,6 +1804,9 @@ typedef struct {
     hashtab_T	b_keywtab;		/* syntax keywords hash table */
     hashtab_T	b_keywtab_ic;		/* idem, ignore case */
     int		b_syn_error;		/* TRUE when error occurred in HL */
+# ifdef FEAT_RELTIME
+    int		b_syn_slow;		/* TRUE when 'redrawtime' reached */
+# endif
     int		b_syn_ic;		/* ignore case for :syn cmds */
     int		b_syn_spell;		/* SYNSPL_ values */
     garray_T	b_syn_patterns;		/* table for syntax patterns */
@@ -1895,7 +1934,10 @@ struct file_buffer
 
     int		b_changed;	/* 'modified': Set to TRUE if something in the
 				   file has been changed and not written out. */
-    int		b_changedtick;	/* incremented for each change, also for undo */
+    dictitem16_T b_ct_di;	/* holds the b:changedtick value in
+				   b_ct_di.di_tv.vval.v_number;
+				   incremented for each change, also for undo */
+#define CHANGEDTICK(buf) ((buf)->b_ct_di.di_tv.vval.v_number)
 
     int		b_saving;	/* Set to TRUE if we are in the middle of
 				   saving the buffer. */
@@ -2109,6 +2151,9 @@ struct file_buffer
 #ifdef FEAT_LISP
     int		b_p_lisp;	/* 'lisp' */
 #endif
+#ifdef FEAT_MBYTE
+    char_u	*b_p_menc;	/* 'makeencoding' */
+#endif
     char_u	*b_p_mps;	/* 'matchpairs' */
     int		b_p_ml;		/* 'modeline' */
     int		b_p_ml_nobin;	/* b_p_ml saved for binary mode */
@@ -2209,6 +2254,7 @@ struct file_buffer
     int		b_ind_hash_comment;
     int		b_ind_cpp_namespace;
     int		b_ind_if_for_while;
+    int		b_ind_cpp_extern_c;
 #endif
 
     linenr_T	b_no_eol_lnum;	/* non-zero lnum when last line of next binary
@@ -2311,6 +2357,11 @@ struct file_buffer
 				 * the file. NULL when not using encryption. */
 #endif
     int		b_mapped_ctrl_c; /* modes where CTRL-C is mapped */
+
+#ifdef FEAT_TERMINAL
+    term_T	*b_term;	/* When not NULL this buffer is for a terminal
+				 * window. */
+#endif
 
 }; /* file_buffer */
 
@@ -3194,6 +3245,7 @@ struct timer_S
     long	tr_interval;	    /* msec */
     char_u	*tr_callback;	    /* allocated */
     partial_T	*tr_partial;
+    int		tr_emsg_count;
 #endif
 };
 

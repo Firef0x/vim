@@ -35,10 +35,76 @@ func Test_static_tagjump()
   tag one
   call assert_equal(2, line('.'))
 
+  bwipe!
   set tags&
   call delete('Xtags')
   call delete('Xfile1')
+endfunc
+
+func Test_duplicate_tagjump()
+  set tags=Xtags
+  call writefile(["!_TAG_FILE_ENCODING\tutf-8\t//",
+        \ "thesame\tXfile1\t1;\"\td\tfile:",
+        \ "thesame\tXfile1\t2;\"\td\tfile:",
+        \ "thesame\tXfile1\t3;\"\td\tfile:",
+        \ ],
+        \ 'Xtags')
+  new Xfile1
+  call setline(1, ['thesame one', 'thesame two', 'thesame three'])
+  write
+  tag thesame
+  call assert_equal(1, line('.'))
+  tnext
+  call assert_equal(2, line('.'))
+  tnext
+  call assert_equal(3, line('.'))
+
   bwipe!
+  set tags&
+  call delete('Xtags')
+  call delete('Xfile1')
+endfunc
+
+func Test_tagjump_switchbuf()
+  set tags=Xtags
+  call writefile(["!_TAG_FILE_ENCODING\tutf-8\t//",
+        \ "second\tXfile1\t2",
+        \ "third\tXfile1\t3",],
+        \ 'Xtags')
+  call writefile(['first', 'second', 'third'], 'Xfile1')
+
+  enew | only
+  set switchbuf=
+  stag second
+  call assert_equal(2, winnr('$'))
+  call assert_equal(2, line('.'))
+  stag third
+  call assert_equal(3, winnr('$'))
+  call assert_equal(3, line('.'))
+
+  enew | only
+  set switchbuf=useopen
+  stag second
+  call assert_equal(2, winnr('$'))
+  call assert_equal(2, line('.'))
+  stag third
+  call assert_equal(2, winnr('$'))
+  call assert_equal(3, line('.'))
+
+  enew | only
+  set switchbuf=usetab
+  tab stag second
+  call assert_equal(2, tabpagenr('$'))
+  call assert_equal(2, line('.'))
+  1tabnext | stag third
+  call assert_equal(2, tabpagenr('$'))
+  call assert_equal(3, line('.'))
+
+  tabclose!
+  enew | only
+  call delete('Xfile1')
+  call delete('Xtags')
+  set switchbuf&vim
 endfunc
 
 " Tests for [ CTRL-I and CTRL-W CTRL-I commands

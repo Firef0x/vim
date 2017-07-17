@@ -38,16 +38,17 @@ win32:	nolog $(SCRIPTS_FIRST) $(SCRIPTS) $(SCRIPTS_WIN32) newtests report
 $(DOSTMP_INFILES): $(*B).in
 	if not exist $(DOSTMP)\NUL md $(DOSTMP)
 	if exist $@ del $@
-	$(VIMPROG) -u dos.vim $(NO_PLUGIN) "+set ff=dos|f $@|wq" $(*B).in
+	$(VIMPROG) -u dos.vim $(NO_INITS) "+set ff=dos|f $@|wq" $(*B).in
 
 # For each input file dostmp/test99.in run the tests.
 # This moves test99.in to test99.in.bak temporarily.
 $(TEST_OUTFILES): $(DOSTMP)\$(*B).in
 	-@if exist test.out DEL test.out
+	-@if exist $(DOSTMP)\$(*B).out DEL $(DOSTMP)\$(*B).out
 	move $(*B).in $(*B).in.bak > nul
 	copy $(DOSTMP)\$(*B).in $(*B).in > nul
 	copy $(*B).ok test.ok > nul
-	$(VIMPROG) -u dos.vim $(NO_PLUGIN) -s dotest.in $(*B).in
+	$(VIMPROG) -u dos.vim $(NO_INITS) -s dotest.in $(*B).in
 	-@if exist test.out MOVE /y test.out $(DOSTMP)\$(*B).out > nul
 	-@if exist $(*B).in.bak move /y $(*B).in.bak $(*B).in > nul
 	-@if exist test.ok del test.ok
@@ -55,7 +56,7 @@ $(TEST_OUTFILES): $(DOSTMP)\$(*B).in
 	-@if exist Xfind rd /s /q Xfind
 	-@del X*
 	-@if exist viminfo del viminfo
-	$(VIMPROG) -u dos.vim $(NO_PLUGIN) "+set ff=unix|f test.out|wq" \
+	$(VIMPROG) -u dos.vim $(NO_INITS) "+set ff=unix|f test.out|wq" \
 		$(DOSTMP)\$(*B).out
 	@diff test.out $*.ok & if errorlevel 1 \
 		( move /y test.out $*.failed > nul \
@@ -94,6 +95,7 @@ clean:
 	-if exist test.log del test.log
 	-if exist messages del messages
 	-if exist benchmark.out del benchmark.out
+	-if exist opt_test.vim del opt_test.vim
 
 nolog:
 	-if exist test.log del test.log
@@ -104,7 +106,7 @@ benchmark:
 
 bench_re_freeze.out: bench_re_freeze.vim
 	-if exist benchmark.out del benchmark.out
-	$(VIMPROG) -u dos.vim $(NO_PLUGIN) $*.in
+	$(VIMPROG) -u dos.vim $(NO_INITS) $*.in
 	@IF EXIST benchmark.out ( type benchmark.out )
 
 # New style of tests uses Vim script with assert calls.  These are easier
@@ -115,5 +117,18 @@ newtests: $(NEW_TESTS)
 
 .vim.res:
 	@echo "$(VIMPROG)" > vimcmd
-	$(VIMPROG) -u NONE $(NO_PLUGIN) -S runtest.vim $*.vim
+	$(VIMPROG) -u NONE $(NO_INITS) -S runtest.vim $*.vim
 	@del vimcmd
+
+test_gui.res: test_gui.vim
+	@echo "$(VIMPROG)" > vimcmd
+	$(VIMPROG) -u NONE $(NO_INITS) -S runtest.vim $*.vim
+	@del vimcmd
+
+test_gui_init.res: test_gui_init.vim
+	@echo "$(VIMPROG)" > vimcmd
+	$(VIMPROG) -u gui_preinit.vim -U gui_init.vim $(NO_PLUGINS) -S runtest.vim $*.vim
+	@del vimcmd
+
+opt_test.vim: ../option.c gen_opt_test.vim
+	$(VIMPROG) -u NONE -S gen_opt_test.vim --noplugin --not-a-term ../option.c

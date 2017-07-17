@@ -111,7 +111,7 @@ read_buffer(
     {
 	/* Set or reset 'modified' before executing autocommands, so that
 	 * it can be changed there. */
-	if (!readonlymode && !bufempty())
+	if (!readonlymode && !BUFEMPTY())
 	    changed();
 	else if (retval == OK)
 	    unchanged(curbuf, FALSE);
@@ -372,18 +372,23 @@ open_buffer(
 set_bufref(bufref_T *bufref, buf_T *buf)
 {
     bufref->br_buf = buf;
+    bufref->br_fnum = buf == NULL ? 0 : buf->b_fnum;
     bufref->br_buf_free_count = buf_free_count;
 }
 
 /*
- * Return TRUE if "bufref->br_buf" points to a valid buffer.
+ * Return TRUE if "bufref->br_buf" points to the same buffer as when
+ * set_bufref() was called and it is a valid buffer.
  * Only goes through the buffer list if buf_free_count changed.
+ * Also checks if b_fnum is still the same, a :bwipe followed by :new might get
+ * the same allocated memory, but it's a different buffer.
  */
     int
 bufref_valid(bufref_T *bufref)
 {
     return bufref->br_buf_free_count == buf_free_count
-					   ? TRUE : buf_valid(bufref->br_buf);
+	? TRUE : buf_valid(bufref->br_buf)
+				  && bufref->br_fnum == bufref->br_buf->b_fnum;
 }
 
 /*
@@ -873,6 +878,25 @@ free_buffer(buf_T *buf)
 }
 
 /*
+ * Initializes b:changedtick.
+ */
+    static void
+init_changedtick(buf_T *buf)
+{
+    dictitem_T *di = (dictitem_T *)&buf->b_ct_di;
+
+    di->di_flags = DI_FLAGS_FIX | DI_FLAGS_RO;
+    di->di_tv.v_type = VAR_NUMBER;
+    di->di_tv.v_lock = VAR_FIXED;
+    di->di_tv.vval.v_number = 0;
+
+#ifdef FEAT_EVAL
+    STRCPY(buf->b_ct_di.di_key, "changedtick");
+    (void)dict_add(buf->b_vars, di);
+#endif
+}
+
+/*
  * Free stuff in the buffer for ":bdel" and when wiping out the buffer.
  */
     static void
@@ -889,8 +913,14 @@ free_buffer_stuff(
 #endif
     }
 #ifdef FEAT_EVAL
-    vars_clear(&buf->b_vars->dv_hashtab); /* free all internal variables */
-    hash_init(&buf->b_vars->dv_hashtab);
+    {
+	varnumber_T tick = CHANGEDTICK(buf);
+
+	vars_clear(&buf->b_vars->dv_hashtab); /* free all buffer variables */
+	hash_init(&buf->b_vars->dv_hashtab);
+	init_changedtick(buf);
+	CHANGEDTICK(buf) = tick;
+    }
 #endif
 #ifdef FEAT_USR_CMDS
     uc_clear(&buf->b_ucmds);		/* clear local user commands */
@@ -1934,7 +1964,7 @@ buflist_new(
 	    && curbuf != NULL
 	    && curbuf->b_ffname == NULL
 	    && curbuf->b_nwindows <= 1
-	    && (curbuf->b_ml.ml_mfp == NULL || bufempty()))
+	    && (curbuf->b_ml.ml_mfp == NULL || BUFEMPTY()))
     {
 	buf = curbuf;
 #ifdef FEAT_AUTOCMD
@@ -1979,6 +2009,7 @@ buflist_new(
 	}
 	init_var_dict(buf->b_vars, &buf->b_bufvar, VAR_SCOPE);
 #endif
+	init_changedtick(buf);
     }
 
     if (ffname != NULL)
@@ -2153,6 +2184,7 @@ free_buf_options(
 #if defined(FEAT_CRYPT)
     clear_string_option(&buf->b_p_cm);
 #endif
+    clear_string_option(&buf->b_p_fp);
 #if defined(FEAT_EVAL)
     clear_string_option(&buf->b_p_fex);
 #endif
@@ -2228,17 +2260,20 @@ free_buf_options(
     clear_string_option(&buf->b_p_lw);
 #endif
     clear_string_option(&buf->b_p_bkc);
+#ifdef FEAT_MBYTE
+    clear_string_option(&buf->b_p_menc);
+#endif
 }
 
 /*
- * get alternate file n
- * set linenr to lnum or altfpos.lnum if lnum == 0
- *	also set cursor column to altfpos.col if 'startofline' is not set.
+ * Get alternate file "n".
+ * Set linenr to "lnum" or altfpos.lnum if "lnum" == 0.
+ *	Also set cursor column to altfpos.col if 'startofline' is not set.
  * if (options & GETF_SETMARK) call setpcmark()
  * if (options & GETF_ALT) we are jumping to an alternate file.
  * if (options & GETF_SWITCH) respect 'switchbuf' settings when jumping
  *
- * return FAIL for failure, OK for success
+ * Return FAIL for failure, OK for success.
  */
     int
 buflist_getfile(
@@ -2304,7 +2339,7 @@ buflist_getfile(
 	/* If 'switchbuf' contains "split", "vsplit" or "newtab" and the
 	 * current buffer isn't empty: open new tab or window */
 	if (wp == NULL && (swb_flags & (SWB_VSPLIT | SWB_SPLIT | SWB_NEWTAB))
-							       && !bufempty())
+							       && !BUFEMPTY())
 	{
 	    if (swb_flags & SWB_NEWTAB)
 		tabpage_new();
@@ -2317,8 +2352,8 @@ buflist_getfile(
 #endif
 
     ++RedrawingDisabled;
-    if (getfile(buf->b_fnum, NULL, NULL, (options & GETF_SETMARK),
-							  lnum, forceit) <= 0)
+    if (GETFILE_SUCCESS(getfile(buf->b_fnum, NULL, NULL,
+				     (options & GETF_SETMARK), lnum, forceit)))
     {
 	--RedrawingDisabled;
 
@@ -2969,7 +3004,7 @@ buflist_findlnum(buf_T *buf)
 
 #if defined(FEAT_LISTCMDS) || defined(PROTO)
 /*
- * List all know file names (for :files and :buffers command).
+ * List all known file names (for :files and :buffers command).
  */
     void
 buflist_list(exarg_T *eap)
@@ -4987,7 +5022,7 @@ do_arg_all(
 #ifdef FEAT_WINDOWS
     /* ":drop all" should re-use an empty window to avoid "--remote-tab"
      * leaving an empty tab page when executed locally. */
-    if (keep_tabs && bufempty() && curbuf->b_nwindows == 1
+    if (keep_tabs && BUFEMPTY() && curbuf->b_nwindows == 1
 			    && curbuf->b_ffname == NULL && !curbuf->b_changed)
 	use_firstwin = TRUE;
 #endif
@@ -5991,7 +6026,7 @@ sign_list_placed(buf_T *rbuf)
 	if (buf->b_signlist != NULL)
 	{
 	    vim_snprintf(lbuf, BUFSIZ, _("Signs for %s:"), buf->b_fname);
-	    MSG_PUTS_ATTR(lbuf, hl_attr(HLF_D));
+	    MSG_PUTS_ATTR(lbuf, HL_ATTR(HLF_D));
 	    msg_putchar('\n');
 	}
 	for (p = buf->b_signlist; p != NULL && !got_int; p = p->next)

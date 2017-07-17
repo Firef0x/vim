@@ -733,8 +733,8 @@ get_py3_exceptions(void)
 #endif /* DYNAMIC_PYTHON3 */
 
 static int py3initialised = 0;
-
 #define PYINITIALISED py3initialised
+static int python_end_called = FALSE;
 
 #define DESTRUCTOR_FINISH(self) Py_TYPE(self)->tp_free((PyObject*)self)
 
@@ -817,6 +817,7 @@ python3_end(void)
     if (recurse != 0)
 	return;
 
+    python_end_called = TRUE;
     ++recurse;
 
 #ifdef DYNAMIC_PYTHON3
@@ -938,6 +939,9 @@ DoPyCommand(const char *cmd, rangeinitializer init_range, runner run, void *arg)
     PyObject		*cmdbytes;
     PyGILState_STATE	pygilstate;
 
+    if (python_end_called)
+	goto theend;
+
 #if defined(MACOS) && !defined(MACOS_X_UNIX)
     GetPort(&oldPort);
     /* Check if the Python library is available */
@@ -1004,6 +1008,9 @@ ex_py3(exarg_T *eap)
 {
     char_u *script;
 
+    if (p_pyx == 0)
+	p_pyx = 3;
+
     script = script_get(eap, eap->arg);
     if (!eap->skip)
     {
@@ -1027,6 +1034,9 @@ ex_py3file(exarg_T *eap)
     const char *file;
     char *p;
     int i;
+
+    if (p_pyx == 0)
+	p_pyx = 3;
 
     /* Have to do it like this. PyRun_SimpleFile requires you to pass a
      * stdio file pointer, but Vim and the Python DLL are compiled with
@@ -1080,6 +1090,9 @@ ex_py3file(exarg_T *eap)
     void
 ex_py3do(exarg_T *eap)
 {
+    if (p_pyx == 0)
+	p_pyx = 3;
+
     DoPyCommand((char *)eap->arg,
 	    (rangeinitializer)init_range_cmd,
 	    (runner)run_do,

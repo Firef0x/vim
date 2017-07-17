@@ -2265,7 +2265,7 @@ printdigraph(digr_T *dp)
 #endif
 	    *p++ = (char_u)dp->result;
 	*p = NUL;
-	msg_outtrans_attr(buf,  hl_attr(HLF_D));
+	msg_outtrans_attr(buf, HL_ATTR(HLF_D));
 	p = buf;
 	if (char2cells(dp->result) == 1)
 	    *p++ = ' ';

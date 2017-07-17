@@ -833,7 +833,7 @@ u_get_undo_file_name(char_u *buf_ffname, int reading)
 		    munged_name = vim_strsave(ffname);
 		    if (munged_name == NULL)
 			return NULL;
-		    for (p = munged_name; *p != NUL; mb_ptr_adv(p))
+		    for (p = munged_name; *p != NUL; MB_PTR_ADV(p))
 			if (vim_ispathsep(*p))
 			    *p = '%';
 		}
@@ -1063,6 +1063,8 @@ undo_read_time(bufinfo_T *bi)
     static int
 undo_read(bufinfo_T *bi, char_u *buffer, size_t size)
 {
+    int retval = OK;
+
 #ifdef FEAT_CRYPT
     if (bi->bi_buffer != NULL)
     {
@@ -1078,10 +1080,8 @@ undo_read(bufinfo_T *bi, char_u *buffer, size_t size)
 		n = fread(bi->bi_buffer, 1, (size_t)CRYPT_BUF_SIZE, bi->bi_fp);
 		if (n == 0)
 		{
-		    /* Error may be checked for only later.  Fill with zeros,
-		     * so that the reader won't use garbage. */
-		    vim_memset(p, 0, size_todo);
-		    return FAIL;
+		    retval = FAIL;
+		    break;
 		}
 		bi->bi_avail = n;
 		bi->bi_used = 0;
@@ -1095,12 +1095,17 @@ undo_read(bufinfo_T *bi, char_u *buffer, size_t size)
 	    size_todo -= (int)n;
 	    p += n;
 	}
-	return OK;
     }
+    else
 #endif
     if (fread(buffer, (size_t)size, 1, bi->bi_fp) != 1)
-	return FAIL;
-    return OK;
+	retval = FAIL;
+
+    if (retval == FAIL)
+	/* Error may be checked for only later.  Fill with zeros,
+	 * so that the reader won't use garbage. */
+	vim_memset(buffer, 0, size);
+    return retval;
 }
 
 /*
@@ -1385,7 +1390,7 @@ unserialize_uep(bufinfo_T *bi, int *error, char_u *file_name)
 {
     int		i;
     u_entry_T	*uep;
-    char_u	**array;
+    char_u	**array = NULL;
     char_u	*line;
     int		line_len;
 
@@ -1402,7 +1407,8 @@ unserialize_uep(bufinfo_T *bi, int *error, char_u *file_name)
     uep->ue_size = undo_read_4c(bi);
     if (uep->ue_size > 0)
     {
-	array = (char_u **)U_ALLOC_LINE(sizeof(char_u *) * uep->ue_size);
+	if (uep->ue_size < LONG_MAX / (int)sizeof(char_u *))
+	    array = (char_u **)U_ALLOC_LINE(sizeof(char_u *) * uep->ue_size);
 	if (array == NULL)
 	{
 	    *error = TRUE;
@@ -1410,8 +1416,6 @@ unserialize_uep(bufinfo_T *bi, int *error, char_u *file_name)
 	}
 	vim_memset(array, 0, sizeof(char_u *) * uep->ue_size);
     }
-    else
-	array = NULL;
     uep->ue_array = array;
 
     for (i = 0; i < uep->ue_size; ++i)
@@ -1787,7 +1791,7 @@ u_read_undo(char_u *name, char_u *hash, char_u *orig_name)
     linenr_T	line_lnum;
     colnr_T	line_colnr;
     linenr_T	line_count;
-    int		num_head = 0;
+    long	num_head = 0;
     long	old_header_seq, new_header_seq, cur_header_seq;
     long	seq_last, seq_cur;
     long	last_save_nr = 0;
@@ -1974,7 +1978,8 @@ u_read_undo(char_u *name, char_u *hash, char_u *orig_name)
      * When there are no headers uhp_table is NULL. */
     if (num_head > 0)
     {
-	uhp_table = (u_header_T **)U_ALLOC_LINE(
+	if (num_head < LONG_MAX / (long)sizeof(u_header_T *))
+	    uhp_table = (u_header_T **)U_ALLOC_LINE(
 					     num_head * sizeof(u_header_T *));
 	if (uhp_table == NULL)
 	    goto error;
@@ -2784,7 +2789,7 @@ u_undoredo(int undo)
 
     curhead->uh_entry = newlist;
     curhead->uh_flags = new_flags;
-    if ((old_flags & UH_EMPTYBUF) && bufempty())
+    if ((old_flags & UH_EMPTYBUF) && BUFEMPTY())
 	curbuf->b_ml.ml_flags |= ML_EMPTY;
     if (old_flags & UH_CHANGED)
 	changed();
@@ -3079,7 +3084,7 @@ ex_undolist(exarg_T *eap UNUSED)
 
 	msg_start();
 	msg_puts_attr((char_u *)_("number changes  when               saved"),
-							      hl_attr(HLF_T));
+							      HL_ATTR(HLF_T));
 	for (i = 0; i < ga.ga_len && !got_int; ++i)
 	{
 	    msg_putchar('\n');
@@ -3175,14 +3180,14 @@ u_find_first_changed(void)
 	if (STRCMP(ml_get_buf(curbuf, lnum, FALSE),
 						uep->ue_array[lnum - 1]) != 0)
 	{
-	    clearpos(&(uhp->uh_cursor));
+	    CLEAR_POS(&(uhp->uh_cursor));
 	    uhp->uh_cursor.lnum = lnum;
 	    return;
 	}
     if (curbuf->b_ml.ml_line_count != uep->ue_size)
     {
 	/* lines added or deleted at the end, put the cursor there */
-	clearpos(&(uhp->uh_cursor));
+	CLEAR_POS(&(uhp->uh_cursor));
 	uhp->uh_cursor.lnum = lnum;
     }
 }

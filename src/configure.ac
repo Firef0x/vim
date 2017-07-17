@@ -11,12 +11,12 @@ AC_DEFINE(UNIX)
 AC_PROG_MAKE_SET
 
 dnl Checks for programs.
-AC_PROG_CC	dnl required by almost everything
-AC_PROG_CPP	dnl required by header file checks
-AC_PROGRAM_EGREP dnl required by AC_EGREP_CPP
-AC_PROG_FGREP	dnl finds working grep -F
-AC_ISC_POSIX	dnl required by AC_C_CROSS
-AC_PROG_AWK	dnl required for "make html" in ../doc
+AC_PROG_CC		dnl required by almost everything
+AC_PROG_CPP		dnl required by header file checks
+AC_PROGRAM_EGREP	dnl required by AC_EGREP_CPP
+AC_PROG_FGREP		dnl finds working grep -F
+AC_ISC_POSIX		dnl required by AC_C_CROSS
+AC_PROG_AWK		dnl required for "make html" in ../doc
 
 dnl Don't strip if we don't have it
 AC_CHECK_PROG(STRIP, strip, strip, :)
@@ -67,8 +67,8 @@ dnl clang-500.2.75 or around has abandoned -f[no-]strength-reduce and issues a
 dnl warning when that flag is passed to.  Accordingly, adjust CFLAGS based on
 dnl the version number of the clang in use.
 dnl Note that this does not work to get the version of clang 3.1 or 3.2.
-AC_MSG_CHECKING(for recent clang version)
-CLANG_VERSION_STRING=`$CC --version 2>/dev/null | sed  -n -e 's/^.*clang.*\([[0-9]][[0-9]]*\.[[0-9]][[0-9]]*\.[[0-9]][[0-9]]*\).*$/\1/p'`
+AC_MSG_CHECKING(for clang version)
+CLANG_VERSION_STRING=`$CC --version 2>/dev/null | sed  -n -e 's/^.*clang[[^0-9]]*\([[0-9]][[0-9]]*\.[[0-9]][[0-9]]*\.[[0-9]][[0-9]]*\).*$/\1/p'`
 if test x"$CLANG_VERSION_STRING" != x"" ; then
   CLANG_MAJOR=`echo "$CLANG_VERSION_STRING" | sed -n -e 's/\([[0-9]][[0-9]]*\)\.[[0-9]][[0-9]]*\.[[0-9]][[0-9]]*/\1/p'`
   CLANG_MINOR=`echo "$CLANG_VERSION_STRING" | sed -n -e 's/[[0-9]][[0-9]]*\.\([[0-9]][[0-9]]*\)\.[[0-9]][[0-9]]*/\1/p'`
@@ -79,11 +79,15 @@ if test x"$CLANG_VERSION_STRING" != x"" ; then
   dnl change the constant 500002075 below appropriately.  To get the
   dnl integer corresponding to a version number, refer to the
   dnl definition of CLANG_VERSION above.
+  AC_MSG_CHECKING(if clang supports -fno-strength-reduce)
   if test "$CLANG_VERSION" -ge 500002075 ; then
-    CFLAGS=`echo "$CFLAGS" | sed -n -e 's/-fno-strength-reduce/ /p'`
+    AC_MSG_RESULT(no)
+    CFLAGS=`echo "$CFLAGS" | sed -e 's/-fno-strength-reduce/ /'`
+  else
+    AC_MSG_RESULT(yes)
   fi
 else
-  AC_MSG_RESULT(no)
+  AC_MSG_RESULT(N/A)
 fi
 
 dnl If configure thinks we are cross compiling, there might be something
@@ -2024,6 +2028,28 @@ if test "$enable_channel" = "yes"; then
   AC_SUBST(CHANNEL_OBJ)
 fi
 
+AC_MSG_CHECKING(--enable-terminal argument)
+AC_ARG_ENABLE(terminal,
+	[  --enable-terminal     Disable terminal emulation support.],
+	[enable_terminal="yes"], )
+if test "$enable_terminal" = "yes"; then
+  if test "x$features" = "xtiny" -o "x$features" = "xsmall"; then
+    AC_MSG_RESULT([cannot use terminal emulator with tiny or small features])
+    enable_terminal="no"
+  else
+    AC_MSG_RESULT(yes)
+  fi
+else
+  AC_MSG_RESULT(no)
+fi
+if test "$enable_terminal" = "yes"; then
+  AC_DEFINE(FEAT_TERMINAL)
+  TERM_SRC="libvterm/src/encoding.c libvterm/src/keyboard.c libvterm/src/mouse.c libvterm/src/parser.c libvterm/src/pen.c libvterm/src/screen.c libvterm/src/state.c libvterm/src/unicode.c libvterm/src/vterm.c"
+  AC_SUBST(TERM_SRC)
+  TERM_OBJ="objects/term_encoding.o objects/term_keyboard.o objects/term_mouse.o objects/term_parser.o objects/term_pen.o objects/term_screen.o objects/term_state.o objects/term_unicode.o objects/term_vterm.o"
+  AC_SUBST(TERM_OBJ)
+fi
+
 AC_MSG_CHECKING(--enable-multibyte argument)
 AC_ARG_ENABLE(multibyte,
 	[  --enable-multibyte      Include multibyte editing support.], ,
@@ -2602,10 +2628,6 @@ if test -z "$SKIP_GTK2"; then
     fi
   fi
   if test "x$GUITYPE" = "xGTK"; then
-    if test "$gtk_minor_version" = 1 -a "0$gtk_micro_version" -ge 1 \
-	|| test "0$gtk_minor_version" -ge 2; then
-      AC_DEFINE(HAVE_GTK_MULTIHEAD)
-    fi
     dnl
     dnl if GTK exists, then check for GNOME.
     dnl
@@ -2654,7 +2676,6 @@ if test -z "$SKIP_GTK3"; then
       SKIP_MOTIF=YES
       GUITYPE=GTK
       AC_SUBST(GTK_LIBNAME)
-      AC_DEFINE(HAVE_GTK_MULTIHEAD)
       AC_DEFINE(USE_GTK3)
     fi
   fi
@@ -3016,6 +3037,23 @@ dnl ---------------------------------------------------------------------------
 dnl end of GUI-checking
 dnl ---------------------------------------------------------------------------
 
+AC_MSG_CHECKING([for /proc link to executable])
+if test -L "/proc/self/exe"; then
+  dnl Linux
+  AC_MSG_RESULT([/proc/self/exe])
+  AC_DEFINE(PROC_EXE_LINK, "/proc/self/exe")
+elif test -L "/proc/self/path/a.out"; then
+  dnl Solaris
+  AC_MSG_RESULT([/proc/self/path/a.out])
+  AC_DEFINE(PROC_EXE_LINK, "/proc/self/path/a.out")
+elif test -L "/proc/curproc/file"; then
+  dnl FreeBSD
+  AC_MSG_RESULT([/proc/curproc/file])
+  AC_DEFINE(PROC_EXE_LINK, "/proc/curproc/file")
+else
+  AC_MSG_RESULT(no)
+fi
+
 dnl Check for Cygwin, which needs an extra source file if not using X11
 AC_MSG_CHECKING(for CYGWIN or MSYS environment)
 case `uname` in
@@ -3334,10 +3372,9 @@ if test "x$vim_cv_terminfo" = "xyes" ; then
   AC_DEFINE(TERMINFO)
 fi
 
-if test "x$olibs" != "x$LIBS"; then
-  AC_CACHE_CHECK([what tgetent() returns for an unknown terminal], [vim_cv_tgent],
-    [
-      AC_RUN_IFELSE([AC_LANG_SOURCE([[
+AC_CACHE_CHECK([what tgetent() returns for an unknown terminal], [vim_cv_tgent],
+  [
+    AC_RUN_IFELSE([AC_LANG_SOURCE([[
 #include "confdefs.h"
 #ifdef HAVE_TERMCAP_H
 # include <termcap.h>
@@ -3348,18 +3385,17 @@ if test "x$olibs" != "x$LIBS"; then
 #endif
 main()
 {char s[10000]; int res = tgetent(s, "thisterminaldoesnotexist"); exit(res != 0); }
-      ]])],[
-	vim_cv_tgent=zero
-      ],[
-	vim_cv_tgent=non-zero
-      ],[
-	AC_MSG_ERROR(failed to compile test program.)
-      ])
+    ]])],[
+      vim_cv_tgent=zero
+    ],[
+      vim_cv_tgent=non-zero
+    ],[
+      AC_MSG_ERROR(failed to compile test program.)
     ])
-  
-  if test "x$vim_cv_tgent" = "xzero" ; then
-    AC_DEFINE(TGETENT_ZERO_ERR, 0)
-  fi
+  ])
+
+if test "x$vim_cv_tgent" = "xzero" ; then
+  AC_DEFINE(TGETENT_ZERO_ERR, 0)
 fi
 
 AC_MSG_CHECKING(whether termcap.h contains ospeed)
@@ -3597,7 +3633,7 @@ dnl Can only be used for functions that do not require any include.
 AC_CHECK_FUNCS(fchdir fchown fsync getcwd getpseudotty \
 	getpwent getpwnam getpwuid getrlimit gettimeofday getwd lstat \
 	memset mkdtemp nanosleep opendir putenv qsort readlink select setenv \
-	setpgid setsid sigaltstack sigstack sigset sigsetjmp sigaction \
+	getpgid setpgid setsid sigaltstack sigstack sigset sigsetjmp sigaction \
 	sigprocmask sigvec strcasecmp strerror strftime stricmp strncasecmp \
 	strnicmp strpbrk strtol tgetent towlower towupper iswupper \
 	usleep utime utimes)
