@@ -25,7 +25,7 @@
  * the terminal emulator.
  *
  * If the terminal window has keyboard focus, typed keys are converted to the
- * terminal encoding and writting to the job over a channel.
+ * terminal encoding and writing to the job over a channel.
  *
  * If the job produces output, it is written to the terminal emulator.  The
  * terminal emulator invokes callbacks when its screen content changes.  The
@@ -33,8 +33,8 @@
  * while, if the terminal window is visible, the screen contents is drawn.
  *
  * TODO:
- * - do not store terminal buffer in viminfo
- * - put terminal title in the statusline
+ * - include functions from #1871
+ * - do not store terminal buffer in viminfo.  Or prefix term:// ?
  * - Add a scrollback buffer (contains lines to scroll off the top).
  *   Can use the buf_T lines, store attributes somewhere else?
  * - When the job ends:
@@ -43,6 +43,9 @@
  *   - Free the terminal emulator.
  *   - Display the scrollback buffer (but with attributes).
  *     Make the buffer not modifiable, drop attributes when making changes.
+ *   - Need an option or argument to drop the window+buffer right away, to be
+ *     used for a shell or Vim.
+ * - add a character in :ls output
  * - when closing window and job has not ended, make terminal hidden?
  * - don't allow exiting Vim when a terminal is still running a job
  * - use win_del_lines() to make scroll-up efficient.
@@ -94,6 +97,9 @@ struct terminal_S {
     /* vterm size does not follow window size */
     int		tl_rows_fixed;
     int		tl_cols_fixed;
+
+    char_u	*tl_title; /* NULL or allocated */
+    char_u	*tl_status_text; /* NULL or allocated */
 
     /* Range of screen rows to update.  Zero based. */
     int		tl_dirty_row_start; /* -1 if nothing dirty */
@@ -271,6 +277,8 @@ free_terminal(term_T *term)
     }
 
     term_free(term);
+    vim_free(term->tl_title);
+    vim_free(term->tl_status_text);
     vim_free(term);
 }
 
@@ -307,6 +315,18 @@ term_write_job_output(term_T *term, char_u *msg, size_t len)
     vterm_screen_flush_damage(vterm_obtain_screen(vterm));
 }
 
+    static void
+update_cursor()
+{
+    /* TODO: this should not always be needed */
+    setcursor();
+    out_flush();
+#ifdef FEAT_GUI
+    if (gui.in_use)
+	gui_update_cursor(FALSE, FALSE);
+#endif
+}
+
 /*
  * Invoked when "msg" output from a job was received.  Write it to the terminal
  * of "buffer".
@@ -322,8 +342,7 @@ write_to_term(buf_T *buffer, char_u *msg, channel_T *channel)
 
     /* TODO: only update once in a while. */
     update_screen(0);
-    setcursor();
-    out_flush();
+    update_cursor();
 }
 
 /*
@@ -454,8 +473,7 @@ terminal_loop(void)
     {
 	/* TODO: skip screen update when handling a sequence of keys. */
 	update_screen(0);
-	setcursor();
-	out_flush();
+	update_cursor();
 	++no_mapping;
 	++allow_keys;
 	got_int = FALSE;
@@ -527,6 +545,24 @@ terminal_loop(void)
     void
 term_job_ended(job_T *job)
 {
+    term_T *term;
+    int	    did_one = FALSE;
+
+    for (term = first_term; term != NULL; term = term->tl_next)
+	if (term->tl_job == job)
+	{
+	    vim_free(term->tl_title);
+	    term->tl_title = NULL;
+	    vim_free(term->tl_status_text);
+	    term->tl_status_text = NULL;
+	    redraw_buf_and_status_later(term->tl_buffer, VALID);
+	    did_one = TRUE;
+	}
+    if (did_one)
+    {
+	redraw_statuslines();
+	update_cursor();
+    }
     if (curbuf->b_term != NULL && curbuf->b_term->tl_job == job)
 	maketitle();
 }
@@ -534,11 +570,10 @@ term_job_ended(job_T *job)
 /*
  * Return TRUE if the job for "buf" is still running.
  */
-    int
-term_job_running(buf_T *buf)
+    static int
+term_job_running(term_T *term)
 {
-    return buf->b_term != NULL && buf->b_term->tl_job != NULL
-	&& buf->b_term->tl_job->jv_status == JOB_STARTED;
+    return term->tl_job != NULL && term->tl_job->jv_status == JOB_STARTED;
 }
 
     static void
@@ -547,22 +582,6 @@ position_cursor(win_T *wp, VTermPos *pos)
     wp->w_wrow = MIN(pos->row, MAX(0, wp->w_height - 1));
     wp->w_wcol = MIN(pos->col, MAX(0, wp->w_width - 1));
 }
-
-static int handle_damage(VTermRect rect, void *user);
-static int handle_moverect(VTermRect dest, VTermRect src, void *user);
-static int handle_movecursor(VTermPos pos, VTermPos oldpos, int visible, void *user);
-static int handle_resize(int rows, int cols, void *user);
-
-static VTermScreenCallbacks screen_callbacks = {
-  handle_damage,	/* damage */
-  handle_moverect,	/* moverect */
-  handle_movecursor,	/* movecursor */
-  NULL,			/* settermprop */
-  NULL,			/* bell */
-  handle_resize,	/* resize */
-  NULL,			/* sb_pushline */
-  NULL			/* sb_popline */
-};
 
     static int
 handle_damage(VTermRect rect, void *user)
@@ -607,12 +626,33 @@ handle_movecursor(
     }
 
     if (is_current)
-    {
-	setcursor();
-	out_flush();
-    }
+	update_cursor();
 
     return 1;
+}
+
+    static int
+handle_settermprop(
+	VTermProp prop,
+	VTermValue *value,
+	void *user)
+{
+    term_T	*term = (term_T *)user;
+
+    switch (prop)
+    {
+	case VTERM_PROP_TITLE:
+	    vim_free(term->tl_title);
+	    term->tl_title = vim_strsave((char_u *)value->string);
+	    vim_free(term->tl_status_text);
+	    term->tl_status_text = NULL;
+	    if (term == curbuf->b_term)
+		maketitle();
+	    return 1;
+	default:
+	    break;
+    }
+    return 0;
 }
 
 /*
@@ -638,6 +678,17 @@ handle_resize(int rows, int cols, void *user)
     redraw_buf_later(term->tl_buffer, NOT_VALID);
     return 1;
 }
+
+static VTermScreenCallbacks screen_callbacks = {
+  handle_damage,	/* damage */
+  handle_moverect,	/* moverect */
+  handle_movecursor,	/* movecursor */
+  handle_settermprop,	/* settermprop */
+  NULL,			/* bell */
+  handle_resize,	/* resize */
+  NULL,			/* sb_pushline */
+  NULL			/* sb_popline */
+};
 
 /*
  * Reverse engineer the RGB value into a cterm color index.
@@ -687,7 +738,7 @@ color2index(VTermColor *color)
     else if (red == 128)
     {
 	if (green == 128 && blue == 128)
-	    return 9; /* high intensity bladk */
+	    return 9; /* high intensity black */
     }
     else if (red == 255)
     {
@@ -850,7 +901,10 @@ term_update_window(win_T *wp)
 		if (c == NUL)
 		{
 		    ScreenLines[off] = ' ';
-		    ScreenLinesUC[off] = NUL;
+#if defined(FEAT_MBYTE)
+		    if (enc_utf8)
+			ScreenLinesUC[off] = NUL;
+#endif
 		}
 		else
 		{
@@ -863,7 +917,8 @@ term_update_window(win_T *wp)
 		    else
 		    {
 			ScreenLines[off] = c;
-			ScreenLinesUC[off] = NUL;
+			if (enc_utf8)
+			    ScreenLinesUC[off] = NUL;
 		    }
 #else
 		    ScreenLines[off] = c;
@@ -876,7 +931,10 @@ term_update_window(win_T *wp)
 		if (cell.width == 2)
 		{
 		    ScreenLines[off] = NUL;
-		    ScreenLinesUC[off] = NUL;
+#if defined(FEAT_MBYTE)
+		    if (enc_utf8)
+			ScreenLinesUC[off] = NUL;
+#endif
 		    ++pos.col;
 		    ++off;
 		}
@@ -950,14 +1008,40 @@ create_vterm(term_T *term, int rows, int cols)
     vterm_screen_reset(screen, 1 /* hard */);
 }
 
+/*
+ * Return the text to show for the buffer name and status.
+ */
+    char_u *
+term_get_status_text(term_T *term)
+{
+    if (term->tl_status_text == NULL)
+    {
+	char_u *txt;
+	size_t len;
+
+	if (term->tl_title != NULL)
+	    txt = term->tl_title;
+	else if (term_job_running(term))
+	    txt = (char_u *)_("running");
+	else
+	    txt = (char_u *)_("finished");
+	len = 9 + STRLEN(term->tl_buffer->b_fname) + STRLEN(txt);
+	term->tl_status_text = alloc(len);
+	if (term->tl_status_text != NULL)
+	    vim_snprintf((char *)term->tl_status_text, len, "%s [%s]",
+						term->tl_buffer->b_fname, txt);
+    }
+    return term->tl_status_text;
+}
+
 # ifdef WIN3264
 
 #define WINPTY_SPAWN_FLAG_AUTO_SHUTDOWN 1ul
 #define WINPTY_SPAWN_FLAG_EXIT_AFTER_SHUTDOWN 2ull
 
-void* (*winpty_config_new)(int, void*);
+void* (*winpty_config_new)(UINT64, void*);
 void* (*winpty_open)(void*, void*);
-void* (*winpty_spawn_config_new)(int, void*, LPCWSTR, void*, void*, void*);
+void* (*winpty_spawn_config_new)(UINT64, void*, LPCWSTR, void*, void*, void*);
 BOOL (*winpty_spawn)(void*, void*, HANDLE*, HANDLE*, DWORD*, void*);
 void (*winpty_config_set_initial_size)(void*, int, int);
 LPCWSTR (*winpty_conin_name)(void*);
