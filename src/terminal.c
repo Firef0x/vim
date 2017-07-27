@@ -35,6 +35,7 @@
  * TODO:
  * - include functions from #1871
  * - do not store terminal buffer in viminfo.  Or prefix term:// ?
+ * - Make CTRL-W . send CTRL-W to terminal?
  * - Add a scrollback buffer (contains lines to scroll off the top).
  *   Can use the buf_T lines, store attributes somewhere else?
  * - When the job ends:
@@ -198,13 +199,16 @@ ex_terminal(exarg_T *eap)
     term->tl_next = first_term;
     first_term = term;
 
+    if (cmd == NULL || *cmd == NUL)
+	cmd = p_sh;
+
     if (buflist_findname(cmd) == NULL)
 	curbuf->b_ffname = vim_strsave(cmd);
     else
     {
 	int	i;
 	size_t	len = STRLEN(cmd) + 10;
-	char_u	*p = alloc(len);
+	char_u	*p = alloc((int)len);
 
 	for (i = 1; p != NULL; ++i)
 	{
@@ -225,9 +229,6 @@ ex_terminal(exarg_T *eap)
 				  (char_u *)"terminal", OPT_FREE|OPT_LOCAL, 0);
 
     set_term_and_win_size(term);
-
-    if (cmd == NULL || *cmd == NUL)
-	cmd = p_sh;
 
     /* System dependent: setup the vterm and start the job in it. */
     if (term_and_job_init(term, term->tl_rows, term->tl_cols, cmd) == OK)
@@ -301,7 +302,7 @@ term_write_job_output(term_T *term, char_u *msg, size_t len)
 	{
 	    if (*p == NL)
 		break;
-	    p += utf_ptr2len_len(p, len - (p - msg));
+	    p += utf_ptr2len_len(p, (int)(len - (p - msg)));
 	}
 	len_now = p - msg - done;
 	vterm_input_write(vterm, (char *)msg + done, len_now);
@@ -320,13 +321,14 @@ term_write_job_output(term_T *term, char_u *msg, size_t len)
     static void
 update_cursor(term_T *term, int redraw)
 {
-    /* TODO: this should not always be needed */
     setcursor();
-    if (redraw && term->tl_buffer == curbuf && term->tl_cursor_visible)
+    if (redraw && term->tl_buffer == curbuf)
     {
+	if (term->tl_cursor_visible)
+	    cursor_on();
 	out_flush();
 #ifdef FEAT_GUI
-	if (gui.in_use)
+	if (gui.in_use && term->tl_cursor_visible)
 	    gui_update_cursor(FALSE, FALSE);
 #endif
     }
@@ -453,7 +455,7 @@ term_convert_key(int c, char *buf)
 	vterm_keyboard_unichar(vterm, c, mod);
 
     /* Read back the converted escape sequence. */
-    return vterm_output_read(vterm, buf, KEY_BUF_LEN);
+    return (int)vterm_output_read(vterm, buf, KEY_BUF_LEN);
 }
 
 /*
@@ -540,7 +542,7 @@ terminal_loop(void)
 	if (len > 0)
 	    /* TODO: if FAIL is returned, stop? */
 	    channel_send(curbuf->b_term->tl_job->jv_channel, PART_IN,
-						     (char_u *)buf, len, NULL);
+						     (char_u *)buf, (int)len, NULL);
     }
 }
 
@@ -1056,7 +1058,7 @@ term_get_status_text(term_T *term)
 	else
 	    txt = (char_u *)_("finished");
 	len = 9 + STRLEN(term->tl_buffer->b_fname) + STRLEN(txt);
-	term->tl_status_text = alloc(len);
+	term->tl_status_text = alloc((int)len);
 	if (term->tl_status_text != NULL)
 	    vim_snprintf((char *)term->tl_status_text, len, "%s [%s]",
 						term->tl_buffer->b_fname, txt);
