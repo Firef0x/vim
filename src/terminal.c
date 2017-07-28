@@ -1153,18 +1153,19 @@ dyn_winpty_init(void)
     static int
 term_and_job_init(term_T *term, int rows, int cols, char_u *cmd)
 {
-    WCHAR	    *p = enc_to_utf16(cmd, NULL);
+    WCHAR	    *p;
     channel_T	    *channel = NULL;
     job_T	    *job = NULL;
     jobopt_T	    opt;
     DWORD	    error;
     HANDLE	    jo = NULL, child_process_handle, child_thread_handle;
     void	    *winpty_err;
-    void	    *spawn_config;
+    void	    *spawn_config = NULL;
 
     if (!dyn_winpty_init())
 	return FAIL;
 
+    p = enc_to_utf16(cmd, NULL);
     if (p == NULL)
 	return FAIL;
 
@@ -1227,9 +1228,14 @@ term_and_job_init(term_T *term, int rows, int cols, char_u *cmd)
 	goto failed;
 
     if (!AssignProcessToJobObject(jo, child_process_handle))
-	goto failed;
+    {
+	/* Failed, switch the way to terminate process with TerminateProcess. */
+	CloseHandle(jo);
+	jo = NULL;
+    }
 
     winpty_spawn_config_free(spawn_config);
+    vim_free(p);
 
     create_vterm(term, rows, cols);
 
@@ -1241,11 +1247,15 @@ term_and_job_init(term_T *term, int rows, int cols, char_u *cmd)
     job->jv_proc_info.dwProcessId = GetProcessId(child_process_handle);
     job->jv_job_object = jo;
     job->jv_status = JOB_STARTED;
+    ++job->jv_refcount;
     term->tl_job = job;
 
     return OK;
 
 failed:
+    if (spawn_config != NULL)
+	winpty_spawn_config_free(spawn_config);
+    vim_free(p);
     if (channel != NULL)
 	channel_clear(channel);
     if (job != NULL)
@@ -1320,6 +1330,8 @@ term_and_job_init(term_T *term, int rows, int cols, char_u *cmd)
     argvars[0].vval.v_string = cmd;
     setup_job_options(&opt, rows, cols);
     term->tl_job = job_start(argvars, &opt);
+    if (term->tl_job != NULL)
+	++term->tl_job->jv_refcount;
 
     return term->tl_job != NULL
 	&& term->tl_job->jv_channel != NULL
@@ -1357,6 +1369,26 @@ term_report_winsize(term_T *term, int rows, int cols)
 	if (part < PART_COUNT && mch_report_winsize(fd, rows, cols) == OK)
 	    mch_stop_job(term->tl_job, (char_u *)"winch");
     }
+}
+
+/*
+ * Mark references in jobs of terminals.
+ */
+    int
+set_ref_in_term(int copyID)
+{
+    int		abort = FALSE;
+    term_T	*term;
+    typval_T	tv;
+
+    for (term = first_term; term != NULL; term = term->tl_next)
+	if (term->tl_job != NULL)
+	{
+	    tv.v_type = VAR_JOB;
+	    tv.vval.v_job = term->tl_job;
+	    abort = abort || set_ref_in_item(&tv, copyID, NULL, NULL);
+	}
+    return abort;
 }
 
 # endif
