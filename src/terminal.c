@@ -33,9 +33,10 @@
  * while, if the terminal window is visible, the screen contents is drawn.
  *
  * TODO:
+ * - if 'term' starts witth "xterm" use it for $TERM.
+ * - To set BS correctly, check get_stty(); Pass the fd of the pty.
  * - include functions from #1871
  * - do not store terminal buffer in viminfo.  Or prefix term:// ?
- * - Make CTRL-W . send CTRL-W to terminal?
  * - Add a scrollback buffer (contains lines to scroll off the top).
  *   Can use the buf_T lines, store attributes somewhere else?
  * - When the job ends:
@@ -50,7 +51,6 @@
  * - when closing window and job has not ended, make terminal hidden?
  * - don't allow exiting Vim when a terminal is still running a job
  * - use win_del_lines() to make scroll-up efficient.
- * - command line completion for :terminal
  * - add test for giving error for invalid 'termsize' value.
  * - support minimal size when 'termsize' is "rows*cols".
  * - support minimal size when 'termsize' is empty?
@@ -459,6 +459,24 @@ term_convert_key(int c, char *buf)
 }
 
 /*
+ * Get a key from the user without mapping.
+ * TODO: use terminal mode mappings.
+ */
+    static int
+term_vgetc()
+{
+    int c;
+
+    ++no_mapping;
+    ++allow_keys;
+    got_int = FALSE;
+    c = vgetc();
+    --no_mapping;
+    --allow_keys;
+    return c;
+}
+
+/*
  * Wait for input and send it to the job.
  * Return when the start of a CTRL-W command is typed or anything else that
  * should be handled as a Normal mode command.
@@ -481,17 +499,28 @@ terminal_loop(void)
 	/* TODO: skip screen update when handling a sequence of keys. */
 	update_screen(0);
 	update_cursor(curbuf->b_term, FALSE);
-	++no_mapping;
-	++allow_keys;
-	got_int = FALSE;
-	c = vgetc();
-	--no_mapping;
-	--allow_keys;
+	c = term_vgetc();
 
 	if (c == (termkey == 0 ? Ctrl_W : termkey))
 	{
-	    stuffcharReadbuff(Ctrl_W);
-	    return;
+#ifdef FEAT_CMDL_INFO
+	    if (add_to_showcmd(c))
+		out_flush();
+#endif
+	    c = term_vgetc();
+#ifdef FEAT_CMDL_INFO
+	    clear_showcmd();
+#endif
+
+	    if (termkey == 0 && c == '.')
+		/* "CTRL-W .": send CTRL-W to the job */
+		c = Ctrl_W;
+	    else if (termkey == 0 || c != termkey)
+	    {
+		stuffcharReadbuff(Ctrl_W);
+		stuffcharReadbuff(c);
+		return;
+	    }
 	}
 
 	/* Catch keys that need to be handled as in Normal mode. */
@@ -727,27 +756,28 @@ static VTermScreenCallbacks screen_callbacks = {
  * First color is 1.  Return 0 if no match found.
  */
     static int
-color2index(VTermColor *color)
+color2index(VTermColor *color, int foreground)
 {
     int red = color->red;
     int blue = color->blue;
     int green = color->green;
 
+    /* The argument for lookup_color() is for the color_names[] table. */
     if (red == 0)
     {
 	if (green == 0)
 	{
 	    if (blue == 0)
-		return 1; /* black */
+		return lookup_color(0, foreground) + 1; /* black */
 	    if (blue == 224)
-		return 5; /* blue */
+		return lookup_color(1, foreground) + 1; /* dark blue */
 	}
 	else if (green == 224)
 	{
 	    if (blue == 0)
-		return 3; /* green */
+		return lookup_color(2, foreground) + 1; /* dark green */
 	    if (blue == 224)
-		return 7; /* cyan */
+		return lookup_color(3, foreground) + 1; /* dark cyan */
 	}
     }
     else if (red == 224)
@@ -755,38 +785,38 @@ color2index(VTermColor *color)
 	if (green == 0)
 	{
 	    if (blue == 0)
-		return 2; /* red */
+		return lookup_color(4, foreground) + 1; /* dark red */
 	    if (blue == 224)
-		return 6; /* magenta */
+		return lookup_color(5, foreground) + 1; /* dark magenta */
 	}
 	else if (green == 224)
 	{
 	    if (blue == 0)
-		return 4; /* yellow */
+		return lookup_color(6, foreground) + 1; /* dark yellow / brown */
 	    if (blue == 224)
-		return 8; /* white */
+		return lookup_color(8, foreground) + 1; /* white / light grey */
 	}
     }
     else if (red == 128)
     {
 	if (green == 128 && blue == 128)
-	    return 9; /* high intensity black */
+	    return lookup_color(12, foreground) + 1; /* high intensity black / dark grey */
     }
     else if (red == 255)
     {
 	if (green == 64)
 	{
 	    if (blue == 64)
-		return 10;  /* high intensity red */
+		return lookup_color(20, foreground) + 1;  /* light red */
 	    if (blue == 255)
-		return 14;  /* high intensity magenta */
+		return lookup_color(22, foreground) + 1;  /* light magenta */
 	}
 	else if (green == 255)
 	{
 	    if (blue == 64)
-		return 12;  /* high intensity yellow */
+		return lookup_color(24, foreground) + 1;  /* yellow */
 	    if (blue == 255)
-		return 16;  /* high intensity white */
+		return lookup_color(26, foreground) + 1;  /* white */
 	}
     }
     else if (red == 64)
@@ -794,14 +824,14 @@ color2index(VTermColor *color)
 	if (green == 64)
 	{
 	    if (blue == 255)
-		return 13;  /* high intensity blue */
+		return lookup_color(14, foreground) + 1;  /* light blue */
 	}
 	else if (green == 255)
 	{
 	    if (blue == 64)
-		return 11;  /* high intensity green */
+		return lookup_color(16, foreground) + 1;  /* light green */
 	    if (blue == 255)
-		return 15;  /* high intensity cyan */
+		return lookup_color(18, foreground) + 1;  /* light cyan */
 	}
     }
     if (t_colors >= 256)
@@ -874,8 +904,8 @@ cell2attr(VTermScreenCell *cell)
     else
 #endif
     {
-	return get_cterm_attr_idx(attr, color2index(&cell->fg),
-						       color2index(&cell->bg));
+	return get_cterm_attr_idx(attr, color2index(&cell->fg, TRUE),
+						color2index(&cell->bg, FALSE));
     }
     return 0;
 }
@@ -899,8 +929,22 @@ term_update_window(win_T *wp)
     if ((!term->tl_rows_fixed && term->tl_rows != wp->w_height)
 	    || (!term->tl_cols_fixed && term->tl_cols != wp->w_width))
     {
-	int rows = term->tl_rows_fixed ? term->tl_rows : wp->w_height;
-	int cols = term->tl_cols_fixed ? term->tl_cols : wp->w_width;
+	int	rows = term->tl_rows_fixed ? term->tl_rows : wp->w_height;
+	int	cols = term->tl_cols_fixed ? term->tl_cols : wp->w_width;
+	win_T	*twp;
+
+	FOR_ALL_WINDOWS(twp)
+	{
+	    /* When more than one window shows the same terminal, use the
+	     * smallest size. */
+	    if (twp->w_buffer == term->tl_buffer)
+	    {
+		if (!term->tl_rows_fixed && rows > twp->w_height)
+		    rows = twp->w_height;
+		if (!term->tl_cols_fixed && cols > twp->w_width)
+		    cols = twp->w_width;
+	    }
+	}
 
 	vterm_set_size(vterm, rows, cols);
 	ch_logn(term->tl_job->jv_channel, "Resizing terminal to %d lines",
@@ -1064,6 +1108,26 @@ term_get_status_text(term_T *term)
 						term->tl_buffer->b_fname, txt);
     }
     return term->tl_status_text;
+}
+
+/*
+ * Mark references in jobs of terminals.
+ */
+    int
+set_ref_in_term(int copyID)
+{
+    int		abort = FALSE;
+    term_T	*term;
+    typval_T	tv;
+
+    for (term = first_term; term != NULL; term = term->tl_next)
+	if (term->tl_job != NULL)
+	{
+	    tv.v_type = VAR_JOB;
+	    tv.vval.v_job = term->tl_job;
+	    abort = abort || set_ref_in_item(&tv, copyID, NULL, NULL);
+	}
+    return abort;
 }
 
 # ifdef WIN3264
@@ -1369,26 +1433,6 @@ term_report_winsize(term_T *term, int rows, int cols)
 	if (part < PART_COUNT && mch_report_winsize(fd, rows, cols) == OK)
 	    mch_stop_job(term->tl_job, (char_u *)"winch");
     }
-}
-
-/*
- * Mark references in jobs of terminals.
- */
-    int
-set_ref_in_term(int copyID)
-{
-    int		abort = FALSE;
-    term_T	*term;
-    typval_T	tv;
-
-    for (term = first_term; term != NULL; term = term->tl_next)
-	if (term->tl_job != NULL)
-	{
-	    tv.v_type = VAR_JOB;
-	    tv.vval.v_job = term->tl_job;
-	    abort = abort || set_ref_in_item(&tv, copyID, NULL, NULL);
-	}
-    return abort;
 }
 
 # endif
