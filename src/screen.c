@@ -1200,11 +1200,10 @@ win_update(win_T *wp)
 #endif
 
 #ifdef FEAT_TERMINAL
-    if (wp->w_buffer->b_term != NULL)
+    /* If this window contains a terminal, redraw works completely differently.
+     */
+    if (term_update_window(wp) == OK)
     {
-	/* This window contains a terminal, redraw works completely
-	 * differently. */
-	term_update_window(wp);
 	wp->w_redr_type = 0;
 	return;
     }
@@ -3131,6 +3130,9 @@ win_line(
 #if defined(LINE_ATTR)
     int		did_line_attr = 0;
 #endif
+#ifdef FEAT_TERMINAL
+    int		get_term_attr = FALSE;
+#endif
 
     /* draw_state: items that are drawn in sequence: */
 #define WL_START	0		/* nothing done yet */
@@ -3240,6 +3242,14 @@ win_line(
     color_cols = wp->w_p_cc_cols;
     if (color_cols != NULL)
 	draw_color_col = advance_color_col(VCOL_HLC, &color_cols);
+#endif
+
+#ifdef FEAT_TERMINAL
+    if (term_is_finished(wp->w_buffer))
+    {
+	extra_check = TRUE;
+	get_term_attr = TRUE;
+    }
 #endif
 
 #ifdef FEAT_SPELL
@@ -4526,6 +4536,18 @@ win_line(
 	    {
 #ifdef FEAT_SPELL
 		int	can_spell = TRUE;
+#endif
+
+#ifdef FEAT_TERMINAL
+		if (get_term_attr)
+		{
+		    syntax_attr = term_get_attr(wp->w_buffer, lnum, col);
+
+		    if (!attr_pri)
+			char_attr = syntax_attr;
+		    else
+			char_attr = hl_combine_attr(syntax_attr, char_attr);
+		}
 #endif
 
 #ifdef FEAT_SYN_HL
@@ -6849,14 +6871,14 @@ win_redr_status(win_T *wp)
 	p = NameBuff;
 	len = (int)STRLEN(p);
 
-	if (wp->w_buffer->b_help
+	if (bt_help(wp->w_buffer)
 #ifdef FEAT_QUICKFIX
 		|| wp->w_p_pvw
 #endif
 		|| bufIsChanged(wp->w_buffer)
 		|| wp->w_buffer->b_p_ro)
 	    *(p + len++) = ' ';
-	if (wp->w_buffer->b_help)
+	if (bt_help(wp->w_buffer))
 	{
 	    STRCPY(p + len, _("[Help]"));
 	    len += (int)STRLEN(p + len);
