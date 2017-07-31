@@ -36,15 +36,10 @@
  * that buffer, attributes come from the scrollback buffer tl_scrollback.
  *
  * TODO:
- * - Problem with statusline (Zyx, Christian)
- * - Make CTRL-W "" paste register content to the job?
  * - in bash mouse clicks are inserting characters.
  * - mouse scroll: when over other window, scroll that window.
  * - For the scrollback buffer store lines in the buffer, only attributes in
  *   tl_scrollback.
- * - Add term_status(): "" if not a terminal, "running" if job running,
- *   "finished" if finished, "running,vim" when job is running and in
- *   Terminal mode, "running,vim,pending" when job output is pending.
  * - When the job ends:
  *   - Need an option or argument to drop the window+buffer right away, to be
  *     used for a shell or Vim. 'termfinish'; "close", "open" (open window when
@@ -71,6 +66,7 @@
  *   mouse in the Terminal window for copy/paste.
  * - when 'encoding' is not utf-8, or the job is using another encoding, setup
  *   conversions.
+ * - update ":help function-list" for terminal functions.
  * - In the GUI use a terminal emulator for :!cmd.
  */
 
@@ -560,7 +556,7 @@ term_convert_key(term_T *term, int c, char *buf)
 }
 
 /*
- * Return TRUE if the job for "buf" is still running.
+ * Return TRUE if the job for "term" is still running.
  */
     static int
 term_job_running(term_T *term)
@@ -869,6 +865,50 @@ position_cursor(win_T *wp, VTermPos *pos)
 }
 
 /*
+ * Handle CTRL-W "": send register contents to the job.
+ */
+    static void
+term_paste_register(int prev_c UNUSED)
+{
+    int		c;
+    list_T	*l;
+    listitem_T	*item;
+    long	reglen = 0;
+    int		type;
+
+#ifdef FEAT_CMDL_INFO
+    if (add_to_showcmd(prev_c))
+    if (add_to_showcmd('"'))
+	out_flush();
+#endif
+    c = term_vgetc();
+#ifdef FEAT_CMDL_INFO
+    clear_showcmd();
+#endif
+
+    /* CTRL-W "= prompt for expression to evaluate. */
+    if (c == '=' && get_expr_register() != '=')
+	return;
+
+    l = (list_T *)get_reg_contents(c, GREG_LIST);
+    if (l != NULL)
+    {
+	type = get_reg_type(c, &reglen);
+	for (item = l->lv_first; item != NULL; item = item->li_next)
+	{
+	    char_u *s = get_tv_string(&item->li_tv);
+
+	    channel_send(curbuf->b_term->tl_job->jv_channel, PART_IN,
+							   s, STRLEN(s), NULL);
+	    if (item->li_next != NULL || type == MLINE)
+		channel_send(curbuf->b_term->tl_job->jv_channel, PART_IN,
+						      (char_u *)"\r", 1, NULL);
+	}
+	list_free(l);
+    }
+}
+
+/*
  * Returns TRUE if the current window contains a terminal and we are sending
  * keys to the job.
  */
@@ -916,6 +956,8 @@ terminal_loop(void)
 
 	if (c == (termkey == 0 ? Ctrl_W : termkey))
 	{
+	    int	    prev_c = c;
+
 #ifdef FEAT_CMDL_INFO
 	    if (add_to_showcmd(c))
 		out_flush();
@@ -934,10 +976,15 @@ terminal_loop(void)
 		/* "CTRL-W .": send CTRL-W to the job */
 		c = Ctrl_W;
 	    }
-	    else if (termkey == 0 && c == 'N')
+	    else if (c == 'N')
 	    {
 		term_enter_terminal_mode();
 		return FAIL;
+	    }
+	    else if (c == '"')
+	    {
+		term_paste_register(prev_c);
+		continue;
 	    }
 	    else if (termkey == 0 || c != termkey)
 	    {
@@ -1796,6 +1843,46 @@ f_term_getsize(typval_T *argvars, typval_T *rettv)
     l = rettv->vval.v_list;
     list_append_number(l, buf->b_term->tl_rows);
     list_append_number(l, buf->b_term->tl_cols);
+}
+
+/*
+ * "term_getstatus(buf)" function
+ */
+    void
+f_term_getstatus(typval_T *argvars, typval_T *rettv)
+{
+    buf_T	*buf = term_get_buf(argvars);
+    term_T	*term;
+    char_u	val[100];
+
+    rettv->v_type = VAR_STRING;
+    if (buf == NULL)
+	return;
+    term = buf->b_term;
+
+    if (term_job_running(term))
+	STRCPY(val, "running");
+    else
+	STRCPY(val, "finished");
+    if (term->tl_terminal_mode)
+	STRCAT(val, ",terminal");
+    rettv->vval.v_string = vim_strsave(val);
+}
+
+/*
+ * "term_gettitle(buf)" function
+ */
+    void
+f_term_gettitle(typval_T *argvars, typval_T *rettv)
+{
+    buf_T	*buf = term_get_buf(argvars);
+
+    rettv->v_type = VAR_STRING;
+    if (buf == NULL)
+	return;
+
+    if (buf->b_term->tl_title != NULL)
+	rettv->vval.v_string = vim_strsave(buf->b_term->tl_title);
 }
 
 /*
