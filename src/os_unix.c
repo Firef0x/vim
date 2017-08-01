@@ -4094,6 +4094,9 @@ mch_parse_cmd(char_u *cmd, int use_shcf, char ***argv, int *argc)
 #endif
 
 #if !defined(USE_SYSTEM) || defined(FEAT_JOB_CHANNEL)
+/*
+ * Set the environment for a child process.
+ */
     static void
 set_child_environment(long rows, long columns, char *term)
 {
@@ -4105,6 +4108,9 @@ set_child_environment(long rows, long columns, char *term)
     static char	envbuf_Lines[20];
     static char	envbuf_Columns[20];
     static char	envbuf_Colors[20];
+#  ifdef FEAT_CLIENTSERVER
+    static char	envbuf_Servername[60];
+#  endif
 # endif
     long	colors =
 #  ifdef FEAT_GUI
@@ -4112,7 +4118,6 @@ set_child_environment(long rows, long columns, char *term)
 #  endif
 	    t_colors;
 
-    /* Simulate to have a dumb terminal (for now) */
 # ifdef HAVE_SETENV
     setenv("TERM", term, 1);
     sprintf((char *)envbuf, "%ld", rows);
@@ -4123,10 +4128,14 @@ set_child_environment(long rows, long columns, char *term)
     setenv("COLUMNS", (char *)envbuf, 1);
     sprintf((char *)envbuf, "%ld", colors);
     setenv("COLORS", (char *)envbuf, 1);
+#  ifdef FEAT_CLIENTSERVER
+    setenv("VIM_SERVERNAME", serverName == NULL ? "" : (char *)serverName, 1);
+#  endif
 # else
     /*
      * Putenv does not copy the string, it has to remain valid.
      * Use a static array to avoid losing allocated memory.
+     * This won't work well when running multiple children...
      */
     vim_snprintf(envbuf_Term, sizeof(envbuf_Term), "TERM=%s", term);
     putenv(envbuf_Term);
@@ -4139,6 +4148,11 @@ set_child_environment(long rows, long columns, char *term)
     putenv(envbuf_Columns);
     vim_snprintf(envbuf_Colors, sizeof(envbuf_Colors), "COLORS=%ld", colors);
     putenv(envbuf_Colors);
+#  ifdef FEAT_CLIENTSERVER
+    vim_snprintf(envbuf_Servername, sizeof(envbuf_Servername),
+	    "VIM_SERVERNAME=%s", serverName == NULL ? "" : (char *)serverName);
+    putenv(envbuf_Servername);
+#  endif
 # endif
 }
 
@@ -4150,6 +4164,11 @@ set_default_child_environment(void)
 #endif
 
 #if defined(FEAT_GUI) || defined(FEAT_JOB_CHANNEL)
+/*
+ * Open a PTY, with FD for the master and slave side.
+ * When failing "pty_master_fd" and "pty_slave_fd" are -1.
+ * When successful both file descriptors are stored.
+ */
     static void
 open_pty(int *pty_master_fd, int *pty_slave_fd)
 {
@@ -5379,6 +5398,17 @@ mch_job_start(char **argv, job_T *job, jobopt_T *options)
 		use_out_for_err || use_file_for_err || use_null_for_err
 		     ? INVALID_FD : fd_err[0] < 0 ? pty_master_fd : fd_err[0]);
 	channel_set_job(channel, job, options);
+    }
+    else
+    {
+	if (fd_in[1] >= 0)
+	    close(fd_in[1]);
+	if (fd_out[0] >= 0)
+	    close(fd_out[0]);
+	if (fd_err[0] >= 0)
+	    close(fd_err[0]);
+	if (pty_master_fd >= 0)
+	    close(pty_master_fd);
     }
 
     /* success! */
