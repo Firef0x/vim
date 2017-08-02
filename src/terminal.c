@@ -36,7 +36,7 @@
  * that buffer, attributes come from the scrollback buffer tl_scrollback.
  *
  * TODO:
- * - Add StatusLineTerm highlighting
+ * - don't allow exiting Vim when a terminal is still running a job
  * - in bash mouse clicks are inserting characters.
  * - mouse scroll: when over other window, scroll that window.
  * - For the scrollback buffer store lines in the buffer, only attributes in
@@ -54,12 +54,8 @@
  * - do not store terminal window in viminfo.  Or prefix term:// ?
  * - add a character in :ls output
  * - add 't' to mode()
- * - When making a change after the job has ended, make the buffer a normal
- *   buffer; needs to be written.
- * - when closing window and job has not ended, make terminal hidden?
- * - when closing window and job has ended, make buffer hidden?
- * - don't allow exiting Vim when a terminal is still running a job
  * - use win_del_lines() to make scroll-up efficient.
+ * - implement term_setsize()
  * - add test for giving error for invalid 'termsize' value.
  * - support minimal size when 'termsize' is "rows*cols".
  * - support minimal size when 'termsize' is empty?
@@ -221,17 +217,19 @@ ex_terminal(exarg_T *eap)
     if (cmd == NULL || *cmd == NUL)
 	cmd = p_sh;
 
-    if (buflist_findname(cmd) == NULL)
-	curbuf->b_ffname = vim_strsave(cmd);
-    else
     {
 	int	i;
 	size_t	len = STRLEN(cmd) + 10;
 	char_u	*p = alloc((int)len);
 
-	for (i = 1; p != NULL; ++i)
+	for (i = 0; p != NULL; ++i)
 	{
-	    vim_snprintf((char *)p, len, "%s (%d)", cmd, i);
+	    /* Prepend a ! to the command name to avoid the buffer name equals
+	     * the executable, otherwise ":w!" would overwrite it. */
+	    if (i == 0)
+		vim_snprintf((char *)p, len, "!%s", cmd);
+	    else
+		vim_snprintf((char *)p, len, "!%s (%d)", cmd, i);
 	    if (buflist_findname(p) == NULL)
 	    {
 		curbuf->b_ffname = p;
@@ -241,8 +239,8 @@ ex_terminal(exarg_T *eap)
     }
     curbuf->b_fname = curbuf->b_ffname;
 
-    /* Mark the buffer as changed, so that it's not easy to abandon the job. */
-    curbuf->b_changed = TRUE;
+    /* Mark the buffer as not modifiable. It can only be made modifiable after
+     * the job finished. */
     curbuf->b_p_ma = FALSE;
     set_string_option_direct((char_u *)"buftype", -1,
 				  (char_u *)"terminal", OPT_FREE|OPT_LOCAL, 0);
@@ -263,8 +261,6 @@ ex_terminal(exarg_T *eap)
 	 * free_terminal(). */
 	do_buffer(DOBUF_WIPE, DOBUF_CURRENT, FORWARD, 0, TRUE);
     }
-
-    /* TODO: Setup pty, see mch_call_shell(). */
 }
 
 /*
@@ -568,7 +564,7 @@ term_convert_key(term_T *term, int c, char *buf)
 /*
  * Return TRUE if the job for "term" is still running.
  */
-    static int
+    int
 term_job_running(term_T *term)
 {
     /* Also consider the job finished when the channel is closed, to avoid a
@@ -963,6 +959,17 @@ terminal_loop(void)
 					  || !term_job_running(curbuf->b_term))
 	    /* job finished while waiting for a character */
 	    break;
+
+#ifdef UNIX
+	may_send_sigint(c, curbuf->b_term->tl_job->jv_pid, 0);
+#endif
+#ifdef WIN3264
+	if (c == Ctrl_C)
+	    /* We don't know if the job can handle CTRL-C itself or not, this
+	     * may kill the shell instead of killing the command running in the
+	     * shell. */
+	    mch_stop_job(curbuf->b_term->tl_job, "quit")
+#endif
 
 	if (c == (termkey == 0 ? Ctrl_W : termkey))
 	{
@@ -1571,6 +1578,11 @@ term_change_in_curbuf(void)
     {
 	free_scrollback(term);
 	redraw_buf_later(term->tl_buffer, NOT_VALID);
+
+	/* The buffer is now like a normal buffer, it cannot be easily
+	 * abandoned when changed. */
+	set_string_option_direct((char_u *)"buftype", -1,
+					  (char_u *)"", OPT_FREE|OPT_LOCAL, 0);
     }
 }
 
