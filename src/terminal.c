@@ -37,8 +37,10 @@
  *
  * TODO:
  * - don't allow exiting Vim when a terminal is still running a job
+ * - MS-Windows: no redraw for 'updatetime'  #1915
  * - in bash mouse clicks are inserting characters.
  * - mouse scroll: when over other window, scroll that window.
+ * - add argument to term_wait() for waiting time.
  * - For the scrollback buffer store lines in the buffer, only attributes in
  *   tl_scrollback.
  * - When the job ends:
@@ -54,13 +56,18 @@
  * - do not store terminal window in viminfo.  Or prefix term:// ?
  * - add a character in :ls output
  * - add 't' to mode()
+ * - set 'filetype' to "terminal"?
  * - use win_del_lines() to make scroll-up efficient.
+ * - Make StatusLineTerm adjust UserN highlighting like StatusLineNC does, see
+ *   use of hightlight_stlnc[].
  * - implement term_setsize()
  * - add test for giving error for invalid 'termsize' value.
  * - support minimal size when 'termsize' is "rows*cols".
  * - support minimal size when 'termsize' is empty?
  * - implement "term" for job_start(): more job options when starting a
  *   terminal.
+ * - support ":term NONE" to open a terminal with a pty but not running a job
+ *   in it.  The pty can be passed to gdb to run the executable in.
  * - if the job in the terminal does not support the mouse, we can use the
  *   mouse in the Terminal window for copy/paste.
  * - when 'encoding' is not utf-8, or the job is using another encoding, setup
@@ -94,6 +101,10 @@ struct terminal_S {
     VTerm	*tl_vterm;
     job_T	*tl_job;
     buf_T	*tl_buffer;
+
+    /* used when tl_job is NULL and only a pty was created */
+    int		tl_tty_fd;
+    char_u	*tl_tty_name;
 
     int		tl_terminal_mode;
     int		tl_channel_closed;
@@ -136,7 +147,7 @@ static term_T *first_term = NULL;
 /*
  * Functions with separate implementation for MS-Windows and Unix-like systems.
  */
-static int term_and_job_init(term_T *term, int rows, int cols, char_u *cmd);
+static int term_and_job_init(term_T *term, int rows, int cols, char_u *cmd, jobopt_T *opt);
 static void term_report_winsize(term_T *term, int rows, int cols);
 static void term_free_vterm(term_T *term);
 
@@ -175,15 +186,49 @@ set_term_and_win_size(term_T *term)
 }
 
 /*
- * ":terminal": open a terminal window and execute a job in it.
+ * Initialize job options for a terminal job.
+ * Caller may overrule some of them.
  */
-    void
-ex_terminal(exarg_T *eap)
+    static void
+init_job_options(jobopt_T *opt)
+{
+    clear_job_options(opt);
+
+    opt->jo_mode = MODE_RAW;
+    opt->jo_out_mode = MODE_RAW;
+    opt->jo_err_mode = MODE_RAW;
+    opt->jo_set = JO_MODE | JO_OUT_MODE | JO_ERR_MODE;
+
+    opt->jo_io[PART_OUT] = JIO_BUFFER;
+    opt->jo_io[PART_ERR] = JIO_BUFFER;
+    opt->jo_set |= JO_OUT_IO + JO_ERR_IO;
+
+    opt->jo_modifiable[PART_OUT] = 0;
+    opt->jo_modifiable[PART_ERR] = 0;
+    opt->jo_set |= JO_OUT_MODIFIABLE + JO_ERR_MODIFIABLE;
+
+    opt->jo_set |= JO_OUT_BUF + JO_ERR_BUF;
+}
+
+/*
+ * Set job options mandatory for a terminal job.
+ */
+    static void
+setup_job_options(jobopt_T *opt, int rows, int cols)
+{
+    opt->jo_io_buf[PART_OUT] = curbuf->b_fnum;
+    opt->jo_io_buf[PART_ERR] = curbuf->b_fnum;
+    opt->jo_pty = TRUE;
+    opt->jo_term_rows = rows;
+    opt->jo_term_cols = cols;
+}
+
+    static void
+term_start(char_u *cmd, jobopt_T *opt)
 {
     exarg_T	split_ea;
     win_T	*old_curwin = curwin;
     term_T	*term;
-    char_u	*cmd = eap->arg;
 
     if (check_restricted() || check_secure())
 	return;
@@ -246,9 +291,10 @@ ex_terminal(exarg_T *eap)
 				  (char_u *)"terminal", OPT_FREE|OPT_LOCAL, 0);
 
     set_term_and_win_size(term);
+    setup_job_options(opt, term->tl_rows, term->tl_cols);
 
     /* System dependent: setup the vterm and start the job in it. */
-    if (term_and_job_init(term, term->tl_rows, term->tl_cols, cmd) == OK)
+    if (term_and_job_init(term, term->tl_rows, term->tl_cols, cmd, opt) == OK)
     {
 	/* store the size we ended up with */
 	vterm_get_size(term->tl_vterm, &term->tl_rows, &term->tl_cols);
@@ -261,6 +307,20 @@ ex_terminal(exarg_T *eap)
 	 * free_terminal(). */
 	do_buffer(DOBUF_WIPE, DOBUF_CURRENT, FORWARD, 0, TRUE);
     }
+}
+
+/*
+ * ":terminal": open a terminal window and execute a job in it.
+ */
+    void
+ex_terminal(exarg_T *eap)
+{
+    jobopt_T opt;
+
+    init_job_options(&opt);
+    /* TODO: get options from before the command */
+
+    term_start(eap->arg, &opt);
 }
 
 /*
@@ -379,10 +439,10 @@ write_to_term(buf_T *buffer, char_u *msg, channel_T *channel)
 
     if (term->tl_vterm == NULL)
     {
-	ch_logn(channel, "NOT writing %d bytes to terminal", (int)len);
+	ch_log(channel, "NOT writing %d bytes to terminal", (int)len);
 	return;
     }
-    ch_logn(channel, "writing %d bytes to terminal", (int)len);
+    ch_log(channel, "writing %d bytes to terminal", (int)len);
     term_write_job_output(term, msg, len);
 
     if (!term->tl_terminal_mode)
@@ -569,7 +629,8 @@ term_job_running(term_T *term)
 {
     /* Also consider the job finished when the channel is closed, to avoid a
      * race condition when updating the title. */
-    return term->tl_job != NULL
+    return term != NULL
+	&& term->tl_job != NULL
 	&& term->tl_job->jv_status == JOB_STARTED
 	&& channel_is_open(term->tl_job->jv_channel);
 }
@@ -955,8 +1016,7 @@ terminal_loop(void)
 	update_cursor(curbuf->b_term, FALSE);
 
 	c = term_vgetc();
-	if (curbuf->b_term->tl_vterm == NULL
-					  || !term_job_running(curbuf->b_term))
+	if (!term_use_loop())
 	    /* job finished while waiting for a character */
 	    break;
 
@@ -968,7 +1028,7 @@ terminal_loop(void)
 	    /* We don't know if the job can handle CTRL-C itself or not, this
 	     * may kill the shell instead of killing the command running in the
 	     * shell. */
-	    mch_stop_job(curbuf->b_term->tl_job, (char_u *)"quit")
+	    mch_stop_job(curbuf->b_term->tl_job, (char_u *)"quit");
 #endif
 
 	if (c == (termkey == 0 ? Ctrl_W : termkey))
@@ -983,8 +1043,7 @@ terminal_loop(void)
 #ifdef FEAT_CMDL_INFO
 	    clear_showcmd();
 #endif
-	    if (curbuf->b_term->tl_vterm == NULL
-					  || !term_job_running(curbuf->b_term))
+	    if (!term_use_loop())
 		/* job finished while waiting for a character */
 		break;
 
@@ -1465,7 +1524,7 @@ term_update_window(win_T *wp)
 	}
 
 	vterm_set_size(vterm, rows, cols);
-	ch_logn(term->tl_job->jv_channel, "Resizing terminal to %d lines",
+	ch_log(term->tl_job->jv_channel, "Resizing terminal to %d lines",
 									 rows);
 	term_report_winsize(term, rows, cols);
     }
@@ -1601,35 +1660,6 @@ term_get_attr(buf_T *buf, linenr_T lnum, int col)
     if (col >= line->sb_cols)
 	return 0;
     return cell2attr(line->sb_cells + col);
-}
-
-/*
- * Set job options common for Unix and MS-Windows.
- */
-    static void
-setup_job_options(jobopt_T *opt, int rows, int cols)
-{
-    clear_job_options(opt);
-    opt->jo_mode = MODE_RAW;
-    opt->jo_out_mode = MODE_RAW;
-    opt->jo_err_mode = MODE_RAW;
-    opt->jo_set = JO_MODE | JO_OUT_MODE | JO_ERR_MODE;
-
-    opt->jo_io[PART_OUT] = JIO_BUFFER;
-    opt->jo_io[PART_ERR] = JIO_BUFFER;
-    opt->jo_set |= JO_OUT_IO + JO_ERR_IO;
-
-    opt->jo_modifiable[PART_OUT] = 0;
-    opt->jo_modifiable[PART_ERR] = 0;
-    opt->jo_set |= JO_OUT_MODIFIABLE + JO_ERR_MODIFIABLE;
-
-    opt->jo_io_buf[PART_OUT] = curbuf->b_fnum;
-    opt->jo_io_buf[PART_ERR] = curbuf->b_fnum;
-    opt->jo_pty = TRUE;
-    opt->jo_set |= JO_OUT_BUF + JO_ERR_BUF;
-
-    opt->jo_term_rows = rows;
-    opt->jo_term_cols = cols;
 }
 
 /*
@@ -1923,6 +1953,26 @@ f_term_gettitle(typval_T *argvars, typval_T *rettv)
 }
 
 /*
+ * "term_gettty(buf)" function
+ */
+    void
+f_term_gettty(typval_T *argvars, typval_T *rettv)
+{
+    buf_T	*buf = term_get_buf(argvars);
+    char_u	*p;
+
+    rettv->v_type = VAR_STRING;
+    if (buf == NULL)
+	return;
+    if (buf->b_term->tl_job != NULL)
+	p = buf->b_term->tl_job->jv_tty_name;
+    else
+	p = buf->b_term->tl_tty_name;
+    if (p != NULL)
+	rettv->vval.v_string = vim_strsave(p);
+}
+
+/*
  * "term_list()" function
  */
     void
@@ -2059,12 +2109,19 @@ f_term_sendkeys(typval_T *argvars, typval_T *rettv)
 f_term_start(typval_T *argvars, typval_T *rettv)
 {
     char_u	*cmd = get_tv_string_chk(&argvars[0]);
-    exarg_T	ea;
+    jobopt_T	opt;
 
     if (cmd == NULL)
 	return;
-    ea.arg = cmd;
-    ex_terminal(&ea);
+    init_job_options(&opt);
+    /* TODO: allow more job options */
+    if (argvars[1].v_type != VAR_UNKNOWN
+	    && get_job_options(&argvars[1], &opt,
+		JO_TIMEOUT_ALL + JO_STOPONEXIT
+		+ JO_EXIT_CB + JO_CLOSE_CALLBACK) == FAIL)
+	return;
+
+    term_start(cmd, &opt);
 
     if (curbuf->b_term != NULL)
 	rettv->vval.v_number = curbuf->b_fnum;
@@ -2079,19 +2136,40 @@ f_term_wait(typval_T *argvars, typval_T *rettv UNUSED)
     buf_T	*buf = term_get_buf(argvars);
 
     if (buf == NULL)
+    {
+	ch_log(NULL, "term_wait(): invalid argument");
 	return;
+    }
 
     /* Get the job status, this will detect a job that finished. */
-    if (buf->b_term->tl_job != NULL)
-	(void)job_status(buf->b_term->tl_job);
+    if (buf->b_term->tl_job == NULL
+	    || STRCMP(job_status(buf->b_term->tl_job), "dead") == 0)
+    {
+	/* The job is dead, keep reading channel I/O until the channel is
+	 * closed. */
+	while (buf->b_term != NULL && !buf->b_term->tl_channel_closed)
+	{
+	    mch_char_avail();
+	    parse_queued_messages();
+	    ui_delay(10L, FALSE);
+	}
+	mch_char_avail();
+	parse_queued_messages();
+    }
+    else
+    {
+	mch_char_avail();
+	parse_queued_messages();
 
-    /* Check for any pending channel I/O. */
-    vpeekc_any();
-    ui_delay(10L, FALSE);
+	/* Wait for 10 msec for any channel I/O. */
+	/* TODO: use delay from optional argument */
+	ui_delay(10L, TRUE);
+	mch_char_avail();
 
-    /* Flushing messages on channels is hopefully sufficient.
-     * TODO: is there a better way? */
-    parse_queued_messages();
+	/* Flushing messages on channels is hopefully sufficient.
+	 * TODO: is there a better way? */
+	parse_queued_messages();
+    }
 }
 
 # ifdef WIN3264
@@ -2179,12 +2257,11 @@ dyn_winpty_init(void)
  * Return OK or FAIL.
  */
     static int
-term_and_job_init(term_T *term, int rows, int cols, char_u *cmd)
+term_and_job_init(term_T *term, int rows, int cols, char_u *cmd, jobopt_T *opt)
 {
     WCHAR	    *p;
     channel_T	    *channel = NULL;
     job_T	    *job = NULL;
-    jobopt_T	    opt;
     DWORD	    error;
     HANDLE	    jo = NULL, child_process_handle, child_thread_handle;
     void	    *winpty_err;
@@ -2214,6 +2291,7 @@ term_and_job_init(term_T *term, int rows, int cols, char_u *cmd)
     if (term->tl_winpty == NULL)
 	goto failed;
 
+    /* TODO: if the command is "NONE" only create a pty. */
     spawn_config = winpty_spawn_config_new(
 	    WINPTY_SPAWN_FLAG_AUTO_SHUTDOWN |
 		WINPTY_SPAWN_FLAG_EXIT_AFTER_SHUTDOWN,
@@ -2267,8 +2345,7 @@ term_and_job_init(term_T *term, int rows, int cols, char_u *cmd)
 
     create_vterm(term, rows, cols);
 
-    setup_job_options(&opt, rows, cols);
-    channel_set_job(channel, job, &opt);
+    channel_set_job(channel, job, opt);
 
     job->jv_channel = channel;
     job->jv_proc_info.hProcess = child_process_handle;
@@ -2350,17 +2427,17 @@ term_report_winsize(term_T *term, int rows, int cols)
  * Return OK or FAIL.
  */
     static int
-term_and_job_init(term_T *term, int rows, int cols, char_u *cmd)
+term_and_job_init(term_T *term, int rows, int cols, char_u *cmd, jobopt_T *opt)
 {
     typval_T	argvars[2];
-    jobopt_T	opt;
 
     create_vterm(term, rows, cols);
 
+    /* TODO: if the command is "NONE" only create a pty. */
     argvars[0].v_type = VAR_STRING;
     argvars[0].vval.v_string = cmd;
-    setup_job_options(&opt, rows, cols);
-    term->tl_job = job_start(argvars, &opt);
+
+    term->tl_job = job_start(argvars, opt);
     if (term->tl_job != NULL)
 	++term->tl_job->jv_refcount;
 
