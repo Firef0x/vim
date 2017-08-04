@@ -34,7 +34,8 @@ func Test_terminal_basic()
     call assert_match("^/dev/", job_info(g:job).tty)
     call assert_match("^/dev/", term_gettty(''))
   else
-    call assert_equal("", job_info(g:job).tty)
+    call assert_match("^winpty://", job_info(g:job).tty)
+    call assert_match("^winpty://", term_gettty(''))
   endif
   call Stop_shell_in_terminal(buf)
   call term_wait(buf)
@@ -62,7 +63,8 @@ endfunc
 
 func Test_terminal_wipe_buffer()
   let buf = Run_shell_in_terminal()
-  exe buf . 'bwipe'
+  call assert_fails(buf . 'bwipe', 'E517')
+  exe buf . 'bwipe!'
   call WaitFor('job_status(g:job) == "dead"')
   call assert_equal('dead', job_status(g:job))
   call assert_equal("", bufname(buf))
@@ -151,6 +153,10 @@ func Test_terminal_scrape()
   call term_wait(1234)
 
   call term_wait(buf)
+  if has('win32')
+    " TODO: this should not be needed
+    sleep 100m
+  endif
   call Check_123(buf)
 
   " Must still work after the job ended.

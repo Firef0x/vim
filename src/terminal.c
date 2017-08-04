@@ -36,7 +36,6 @@
  * that buffer, attributes come from the scrollback buffer tl_scrollback.
  *
  * TODO:
- * - don't allow exiting Vim when a terminal is still running a job
  * - MS-Windows: no redraw for 'updatetime'  #1915
  * - in bash mouse clicks are inserting characters.
  * - mouse scroll: when over other window, scroll that window.
@@ -284,11 +283,16 @@ term_start(char_u *cmd, jobopt_T *opt)
     }
     curbuf->b_fname = curbuf->b_ffname;
 
+    set_string_option_direct((char_u *)"buftype", -1,
+				  (char_u *)"terminal", OPT_FREE|OPT_LOCAL, 0);
+
     /* Mark the buffer as not modifiable. It can only be made modifiable after
      * the job finished. */
     curbuf->b_p_ma = FALSE;
-    set_string_option_direct((char_u *)"buftype", -1,
-				  (char_u *)"terminal", OPT_FREE|OPT_LOCAL, 0);
+
+    /* Set 'bufhidden' to "hide": allow closing the window. */
+    set_string_option_direct((char_u *)"bufhidden", -1,
+				      (char_u *)"hide", OPT_FREE|OPT_LOCAL, 0);
 
     set_term_and_win_size(term);
     setup_job_options(opt, term->tl_rows, term->tl_cols);
@@ -1305,6 +1309,7 @@ term_channel_closed(channel_T *ch)
 
 	/* Need to break out of vgetc(). */
 	ins_char_typebuf(K_IGNORE);
+	typebuf_was_filled = TRUE;
 
 	term = curbuf->b_term;
 	if (term != NULL)
@@ -2140,31 +2145,36 @@ f_term_wait(typval_T *argvars, typval_T *rettv UNUSED)
 	ch_log(NULL, "term_wait(): invalid argument");
 	return;
     }
+    if (buf->b_term->tl_job == NULL)
+    {
+	ch_log(NULL, "term_wait(): no job to wait for");
+	return;
+    }
 
     /* Get the job status, this will detect a job that finished. */
-    if (buf->b_term->tl_job == NULL
-	    || STRCMP(job_status(buf->b_term->tl_job), "dead") == 0)
+    if (STRCMP(job_status(buf->b_term->tl_job), "dead") == 0)
     {
 	/* The job is dead, keep reading channel I/O until the channel is
 	 * closed. */
+	ch_log(NULL, "term_wait(): waiting for channel to close");
 	while (buf->b_term != NULL && !buf->b_term->tl_channel_closed)
 	{
-	    mch_char_avail();
+	    mch_check_messages();
 	    parse_queued_messages();
 	    ui_delay(10L, FALSE);
 	}
-	mch_char_avail();
+	mch_check_messages();
 	parse_queued_messages();
     }
     else
     {
-	mch_char_avail();
+	mch_check_messages();
 	parse_queued_messages();
 
 	/* Wait for 10 msec for any channel I/O. */
 	/* TODO: use delay from optional argument */
 	ui_delay(10L, TRUE);
-	mch_char_avail();
+	mch_check_messages();
 
 	/* Flushing messages on channels is hopefully sufficient.
 	 * TODO: is there a better way? */
@@ -2195,6 +2205,7 @@ void (*winpty_spawn_config_free)(void*);
 void (*winpty_error_free)(void*);
 LPCWSTR (*winpty_error_msg)(void*);
 BOOL (*winpty_set_size)(void*, int, int, void*);
+HANDLE (*winpty_agent_process)(void*);
 
 #define WINPTY_DLL "winpty.dll"
 
@@ -2224,6 +2235,7 @@ dyn_winpty_init(void)
 	{"winpty_spawn_config_new", (FARPROC*)&winpty_spawn_config_new},
 	{"winpty_error_msg", (FARPROC*)&winpty_error_msg},
 	{"winpty_set_size", (FARPROC*)&winpty_set_size},
+	{"winpty_agent_process", (FARPROC*)&winpty_agent_process},
 	{NULL, NULL}
     };
 
@@ -2266,6 +2278,7 @@ term_and_job_init(term_T *term, int rows, int cols, char_u *cmd, jobopt_T *opt)
     HANDLE	    jo = NULL, child_process_handle, child_thread_handle;
     void	    *winpty_err;
     void	    *spawn_config = NULL;
+    char	    buf[MAX_PATH];
 
     if (!dyn_winpty_init())
 	return FAIL;
@@ -2346,12 +2359,16 @@ term_and_job_init(term_T *term, int rows, int cols, char_u *cmd, jobopt_T *opt)
     create_vterm(term, rows, cols);
 
     channel_set_job(channel, job, opt);
+    job_set_options(job, opt);
 
     job->jv_channel = channel;
     job->jv_proc_info.hProcess = child_process_handle;
     job->jv_proc_info.dwProcessId = GetProcessId(child_process_handle);
     job->jv_job_object = jo;
     job->jv_status = JOB_STARTED;
+    sprintf(buf, "winpty://%lu",
+	    GetProcessId(winpty_agent_process(term->tl_winpty)));
+    job->jv_tty_name = vim_strsave((char_u*)buf);
     ++job->jv_refcount;
     term->tl_job = job;
 
