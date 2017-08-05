@@ -37,8 +37,6 @@
  *
  * TODO:
  * - MS-Windows: no redraw for 'updatetime'  #1915
- * - in bash mouse clicks are inserting characters.
- * - mouse scroll: when over other window, scroll that window.
  * - add argument to term_wait() for waiting time.
  * - For the scrollback buffer store lines in the buffer, only attributes in
  *   tl_scrollback.
@@ -52,6 +50,9 @@
  * - make term_getcursor() return type (none/block/bar/underline) and
  *   attributes (color, blink, etc.)
  * - To set BS correctly, check get_stty(); Pass the fd of the pty.
+ *   For the GUI fill termios with default values, perhaps like pangoterm:
+ *   http://bazaar.launchpad.net/~leonerd/pangoterm/trunk/view/head:/main.c#L134
+ *   Also get the NL behavior from there.
  * - do not store terminal window in viminfo.  Or prefix term:// ?
  * - add a character in :ls output
  * - add 't' to mode()
@@ -64,7 +65,14 @@
  * - support minimal size when 'termsize' is "rows*cols".
  * - support minimal size when 'termsize' is empty?
  * - implement "term" for job_start(): more job options when starting a
- *   terminal.
+ *   terminal.  Allow:
+ *	"in_io", "in_top", "in_bot", "in_name", "in_buf"
+	"out_io", "out_name", "out_buf", "out_modifiable", "out_msg"
+	"err_io", "err_name", "err_buf", "err_modifiable", "err_msg"
+ *   Check that something is connected to the terminal.
+ *   Test: "cat" reading from a file or buffer
+ *         "ls" writing stdout to a file or buffer
+ *         shell writing stderr to a file or buffer
  * - support ":term NONE" to open a terminal with a pty but not running a job
  *   in it.  The pty can be passed to gdb to run the executable in.
  * - if the job in the terminal does not support the mouse, we can use the
@@ -81,9 +89,11 @@
 
 #if defined(FEAT_TERMINAL) || defined(PROTO)
 
-#ifdef WIN3264
-# define MIN(x,y) (x < y ? x : y)
-# define MAX(x,y) (x > y ? x : y)
+#ifndef MIN
+# define MIN(x,y) ((x) < (y) ? (x) : (y))
+#endif
+#ifndef MAX
+# define MAX(x,y) ((x) > (y) ? (x) : (y))
 #endif
 
 #include "libvterm/include/vterm.h"
@@ -244,6 +254,17 @@ term_start(char_u *cmd, jobopt_T *opt)
     split_ea.cmdidx = CMD_new;
     split_ea.cmd = (char_u *)"new";
     split_ea.arg = (char_u *)"";
+    if (opt->jo_term_rows > 0 && !(cmdmod.split & WSP_VERT))
+    {
+	split_ea.line2 = opt->jo_term_rows;
+	split_ea.addr_count = 1;
+    }
+    if (opt->jo_term_cols > 0 && (cmdmod.split & WSP_VERT))
+    {
+	split_ea.line2 = opt->jo_term_cols;
+	split_ea.addr_count = 1;
+    }
+
     ex_splitview(&split_ea);
     if (curwin == old_curwin)
     {
@@ -254,6 +275,12 @@ term_start(char_u *cmd, jobopt_T *opt)
     term->tl_buffer = curbuf;
     curbuf->b_term = term;
 
+    /* only one size was taken care of with :new, do the other one */
+    if (opt->jo_term_rows > 0 && (cmdmod.split & WSP_VERT))
+	win_setheight(opt->jo_term_rows);
+    if (opt->jo_term_cols > 0 && !(cmdmod.split & WSP_VERT))
+	win_setwidth(opt->jo_term_cols);
+
     /* Link the new terminal in the list of active terminals. */
     term->tl_next = first_term;
     first_term = term;
@@ -261,6 +288,9 @@ term_start(char_u *cmd, jobopt_T *opt)
     if (cmd == NULL || *cmd == NUL)
 	cmd = p_sh;
 
+    if (opt->jo_term_name != NULL)
+	curbuf->b_ffname = vim_strsave(opt->jo_term_name);
+    else
     {
 	int	i;
 	size_t	len = STRLEN(cmd) + 10;
@@ -322,7 +352,20 @@ ex_terminal(exarg_T *eap)
     jobopt_T opt;
 
     init_job_options(&opt);
-    /* TODO: get options from before the command */
+
+    if (eap->addr_count == 2)
+    {
+	opt.jo_term_rows = eap->line1;
+	opt.jo_term_cols = eap->line2;
+    }
+    else if (eap->addr_count == 1)
+    {
+	if (cmdmod.split & WSP_VERT)
+	    opt.jo_term_cols = eap->line2;
+	else
+	    opt.jo_term_rows = eap->line2;
+    }
+    /* TODO: get more options from before the command */
 
     term_start(eap->arg, &opt);
 }
@@ -862,8 +905,10 @@ term_vgetc()
 
 /*
  * Send keys to terminal.
+ * Return FAIL when the key needs to be handled in Normal mode.
+ * Return OK when the key was dropped or sent to the terminal.
  */
-    static int
+    int
 send_keys_to_term(term_T *term, int c, int typed)
 {
     char	msg[KEY_BUF_LEN];
@@ -902,13 +947,18 @@ send_keys_to_term(term_T *term, int c, int typed)
 	case K_X1RELEASE:
 	case K_X2MOUSE:
 	case K_X2RELEASE:
+
+	case K_MOUSEUP:
+	case K_MOUSEDOWN:
+	case K_MOUSELEFT:
+	case K_MOUSERIGHT:
 	    if (mouse_row < W_WINROW(curwin)
 		    || mouse_row >= (W_WINROW(curwin) + curwin->w_height)
 		    || mouse_col < W_WINCOL(curwin)
 		    || mouse_col >= W_ENDCOL(curwin)
 		    || dragging_outside)
 	    {
-		/* click outside the current window */
+		/* click or scroll outside the current window */
 		if (typed)
 		{
 		    stuffcharReadbuff(c);
@@ -1038,7 +1088,7 @@ terminal_loop(void)
 	    mch_stop_job(curbuf->b_term->tl_job, (char_u *)"quit");
 #endif
 
-	if (c == (termkey == 0 ? Ctrl_W : termkey))
+	if (c == (termkey == 0 ? Ctrl_W : termkey) || c == Ctrl_BSL)
 	{
 	    int	    prev_c = c;
 
@@ -1054,7 +1104,15 @@ terminal_loop(void)
 		/* job finished while waiting for a character */
 		break;
 
-	    if (termkey == 0 && c == '.')
+	    if (prev_c == Ctrl_BSL)
+	    {
+		if (c == Ctrl_N)
+		    /* CTRL-\ CTRL-N : execute one Normal mode command. */
+		    return OK;
+		/* Send both keys to the terminal. */
+		send_keys_to_term(curbuf->b_term, prev_c, TRUE);
+	    }
+	    else if (termkey == 0 && c == '.')
 	    {
 		/* "CTRL-W .": send CTRL-W to the job */
 		c = Ctrl_W;
@@ -2126,7 +2184,8 @@ f_term_start(typval_T *argvars, typval_T *rettv)
     if (argvars[1].v_type != VAR_UNKNOWN
 	    && get_job_options(&argvars[1], &opt,
 		JO_TIMEOUT_ALL + JO_STOPONEXIT
-		+ JO_EXIT_CB + JO_CLOSE_CALLBACK) == FAIL)
+		+ JO_EXIT_CB + JO_CLOSE_CALLBACK
+		+ JO2_TERM_NAME) == FAIL)
 	return;
 
     term_start(cmd, &opt);
