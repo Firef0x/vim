@@ -695,14 +695,16 @@ term_job_running(term_T *term)
     static void
 add_scrollback_line_to_buffer(term_T *term, char_u *text, int len)
 {
-    linenr_T	    lnum = term->tl_scrollback.ga_len - 1;
+    buf_T	*buf = term->tl_buffer;
+    int		empty = (buf->b_ml.ml_flags & ML_EMPTY);
+    linenr_T	lnum = buf->b_ml.ml_line_count;
 
     ml_append_buf(term->tl_buffer, lnum, text, len + 1, FALSE);
-    if (lnum == 0)
+    if (empty)
     {
 	/* Delete the empty line that was in the empty buffer. */
-	curbuf = term->tl_buffer;
-	ml_delete(2, FALSE);
+	curbuf = buf;
+	ml_delete(1, FALSE);
 	curbuf = curwin->w_buffer;
     }
 }
@@ -1344,11 +1346,11 @@ handle_pushline(int cols, const VTermScreenCell *cells, void *user)
 	    if (cells[i].chars[0] != 0)
 		len = i + 1;
 
+	ga_init2(&ga, 1, 100);
 	if (len > 0)
 	    p = (cellattr_T *)alloc((int)sizeof(cellattr_T) * len);
 	if (p != NULL)
 	{
-	    ga_init2(&ga, 1, 100);
 	    for (col = 0; col < len; col += cells[col].width)
 	    {
 		if (ga_grow(&ga, MB_MAXBYTES) == FAIL)
@@ -2143,7 +2145,11 @@ f_term_scrape(typval_T *argvars, typval_T *rettv)
     pos.row = get_row_number(&argvars[1], term);
 
     if (term->tl_vterm != NULL)
+    {
 	screen = vterm_obtain_screen(term->tl_vterm);
+	p = NULL;
+	line = NULL;
+    }
     else
     {
 	linenr_T	lnum = pos.row + term->tl_scrollback_scrolled;
