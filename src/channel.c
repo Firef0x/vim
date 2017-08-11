@@ -4153,6 +4153,8 @@ free_job_options(jobopt_T *opt)
 	partial_unref(opt->jo_exit_partial);
     else if (opt->jo_exit_cb != NULL)
 	func_unref(opt->jo_exit_cb);
+    if (opt->jo_env != NULL)
+	dict_unref(opt->jo_env);
 }
 
 /*
@@ -4426,13 +4428,33 @@ get_job_options(typval_T *tv, jobopt_T *opt, int supported)
 		val = get_tv_string(item);
 		if (STRCMP(val, "open") != 0 && STRCMP(val, "close") != 0)
 		{
-		    EMSG2(_(e_invarg2), "drop");
+		    EMSG2(_(e_invarg2), val);
 		    return FAIL;
 		}
 		opt->jo_set2 |= JO2_TERM_FINISH;
 		opt->jo_term_finish = *val;
 	    }
 #endif
+	    else if (STRCMP(hi->hi_key, "env") == 0)
+	    {
+		if (!(supported & JO2_ENV))
+		    break;
+		opt->jo_set |= JO2_ENV;
+		opt->jo_env = item->vval.v_dict;
+		++item->vval.v_dict->dv_refcount;
+	    }
+	    else if (STRCMP(hi->hi_key, "cwd") == 0)
+	    {
+		if (!(supported & JO2_CWD))
+		    break;
+		opt->jo_cwd = get_tv_string_buf_chk(item, opt->jo_cwd_buf);
+		if (opt->jo_cwd == NULL || !mch_isdir(opt->jo_cwd))
+		{
+		    EMSG2(_(e_invarg2), "cwd");
+		    return FAIL;
+		}
+		opt->jo_set |= JO2_CWD;
+	    }
 	    else if (STRCMP(hi->hi_key, "waittime") == 0)
 	    {
 		if (!(supported & JO_WAITTIME))
@@ -4844,7 +4866,7 @@ job_stop_on_exit(void)
 
     for (job = first_job; job != NULL; job = job->jv_next)
 	if (job->jv_status == JOB_STARTED && job->jv_stoponexit != NULL)
-	    mch_stop_job(job, job->jv_stoponexit);
+	    mch_signal_job(job, job->jv_stoponexit);
 }
 
 /*
@@ -5191,7 +5213,7 @@ job_stop(job_T *job, typval_T *argvars, char *type)
 	return 0;
     }
     ch_log(job->jv_channel, "Stopping job with '%s'", (char *)arg);
-    if (mch_stop_job(job, arg) == FAIL)
+    if (mch_signal_job(job, arg) == FAIL)
 	return 0;
 
     /* Assume that only "kill" will kill the job. */

@@ -146,6 +146,8 @@ struct terminal_S {
 
     VTermPos	tl_cursor_pos;
     int		tl_cursor_visible;
+
+    int		tl_using_altscreen;
 };
 
 #define TMODE_ONCE 1	    /* CTRL-\ CTRL-N used */
@@ -1141,7 +1143,7 @@ terminal_loop(void)
 	    /* We don't know if the job can handle CTRL-C itself or not, this
 	     * may kill the shell instead of killing the command running in the
 	     * shell. */
-	    mch_stop_job(curbuf->b_term->tl_job, (char_u *)"quit");
+	    mch_signal_job(curbuf->b_term->tl_job, (char_u *)"quit");
 #endif
 
 	if (c == (termkey == 0 ? Ctrl_W : termkey) || c == Ctrl_BSL)
@@ -1314,6 +1316,11 @@ handle_settermprop(
 	    term->tl_cursor_visible = value->boolean;
 	    may_toggle_cursor(term);
 	    out_flush();
+	    break;
+
+	case VTERM_PROP_ALTSCREEN:
+	    /* TODO: do anything else? */
+	    term->tl_using_altscreen = value->boolean;
 	    break;
 
 	default:
@@ -1865,6 +1872,9 @@ create_vterm(term_T *term, int rows, int cols)
 
     /* Required to initialize most things. */
     vterm_screen_reset(screen, 1 /* hard */);
+
+    /* Allow using alternate screen. */
+    vterm_screen_enable_altscreen(screen, 1);
 }
 
 /*
@@ -1936,6 +1946,19 @@ term_get_buf(typval_T *argvars)
     if (buf == NULL || buf->b_term == NULL)
 	return NULL;
     return buf;
+}
+
+/*
+ * "term_getaltscreen(buf)" function
+ */
+    void
+f_term_getaltscreen(typval_T *argvars, typval_T *rettv)
+{
+    buf_T	*buf = term_get_buf(argvars);
+
+    if (buf == NULL)
+	return;
+    rettv->vval.v_number = buf->b_term->tl_using_altscreen;
 }
 
 /*
@@ -2339,7 +2362,8 @@ f_term_start(typval_T *argvars, typval_T *rettv)
 	    && get_job_options(&argvars[1], &opt,
 		JO_TIMEOUT_ALL + JO_STOPONEXIT
 		+ JO_EXIT_CB + JO_CLOSE_CALLBACK
-		+ JO2_TERM_NAME + JO2_TERM_FINISH) == FAIL)
+		+ JO2_TERM_NAME + JO2_TERM_FINISH
+		+ JO2_CWD + JO2_ENV) == FAIL)
 	return;
 
     term_start(cmd, &opt);
@@ -2712,7 +2736,7 @@ term_report_winsize(term_T *term, int rows, int cols)
 		break;
 	}
 	if (part < PART_COUNT && mch_report_winsize(fd, rows, cols) == OK)
-	    mch_stop_job(term->tl_job, (char_u *)"winch");
+	    mch_signal_job(term->tl_job, (char_u *)"winch");
     }
 }
 
