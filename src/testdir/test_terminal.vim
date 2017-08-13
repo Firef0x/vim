@@ -320,7 +320,7 @@ func Test_terminal_curwin()
 
 endfunc
 
-func Test_finish_close()
+func Test_finish_open_close()
   call assert_equal(1, winnr('$'))
 
   if s:python != ''
@@ -337,7 +337,6 @@ func Test_finish_close()
   endif
 
   exe 'terminal ++close ' . cmd
-  let buf = bufnr('')
   call assert_equal(2, winnr('$'))
   wincmd p
   call WaitFor("winnr('$') == 1", waittime)
@@ -345,25 +344,46 @@ func Test_finish_close()
 
   call term_start(cmd, {'term_finish': 'close'})
   call assert_equal(2, winnr('$'))
-  let buf = bufnr('')
   wincmd p
   call WaitFor("winnr('$') == 1", waittime)
   call assert_equal(1, winnr('$'))
 
   exe 'terminal ++open ' . cmd
-  let buf = bufnr('')
   close
   call WaitFor("winnr('$') == 2", waittime)
   call assert_equal(2, winnr('$'))
   bwipe
 
   call term_start(cmd, {'term_finish': 'open'})
-  let buf = bufnr('')
   close
   call WaitFor("winnr('$') == 2", waittime)
   call assert_equal(2, winnr('$'))
-
   bwipe
+
+  exe 'terminal ++hidden ++open ' . cmd
+  call assert_equal(1, winnr('$'))
+  call WaitFor("winnr('$') == 2", waittime)
+  call assert_equal(2, winnr('$'))
+  bwipe
+
+  call term_start(cmd, {'term_finish': 'open', 'hidden': 1})
+  call assert_equal(1, winnr('$'))
+  call WaitFor("winnr('$') == 2", waittime)
+  call assert_equal(2, winnr('$'))
+  bwipe
+
+  call assert_fails("call term_start(cmd, {'term_opencmd': 'open'})", 'E475:')
+  call assert_fails("call term_start(cmd, {'term_opencmd': 'split %x'})", 'E475:')
+  call assert_fails("call term_start(cmd, {'term_opencmd': 'split %d and %s'})", 'E475:')
+  call assert_fails("call term_start(cmd, {'term_opencmd': 'split % and %d'})", 'E475:')
+
+  call term_start(cmd, {'term_finish': 'open', 'term_opencmd': '4split | buffer %d'})
+  close
+  call WaitFor("winnr('$') == 2", waittime)
+  call assert_equal(2, winnr('$'))
+  call assert_equal(4, winheight(0))
+  bwipe
+
 endfunc
 
 func Test_terminal_cwd()

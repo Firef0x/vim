@@ -3741,6 +3741,9 @@ mch_free_acl(vim_acl_T acl)
 handler_routine(
     DWORD dwCtrlType)
 {
+    INPUT_RECORD ir;
+    DWORD out;
+
     switch (dwCtrlType)
     {
     case CTRL_C_EVENT:
@@ -3750,6 +3753,16 @@ handler_routine(
 
     case CTRL_BREAK_EVENT:
 	g_fCBrkPressed	= TRUE;
+	ctrl_break_was_pressed = TRUE;
+	/* ReadConsoleInput is blocking, send a key event to continue. */
+	ir.EventType = KEY_EVENT;
+	ir.Event.KeyEvent.bKeyDown = TRUE;
+	ir.Event.KeyEvent.wRepeatCount = 1;
+	ir.Event.KeyEvent.wVirtualKeyCode = VK_CANCEL;
+	ir.Event.KeyEvent.wVirtualScanCode = 0;
+	ir.Event.KeyEvent.dwControlKeyState = 0;
+	ir.Event.KeyEvent.uChar.UnicodeChar = 0;
+	WriteConsoleInput(g_hConIn, &ir, 1, &out);
 	return TRUE;
 
     /* fatal events: shut down gracefully */
@@ -6296,6 +6309,7 @@ mch_breakcheck(int force)
 #ifndef FEAT_GUI_W32	    /* never used */
     if (g_fCtrlCPressed || g_fCBrkPressed)
     {
+	ctrl_break_was_pressed = g_fCBrkPressed;
 	g_fCtrlCPressed = g_fCBrkPressed = FALSE;
 	got_int = TRUE;
     }
