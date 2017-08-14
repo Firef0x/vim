@@ -42,8 +42,13 @@ func Test_terminal_basic()
     call assert_match("^winpty://", job_info(g:job).tty)
     call assert_match("^winpty://", term_gettty(''))
   endif
+  call assert_equal('t', mode())
+  call assert_match('%aR[^\n]*running]', execute('ls'))
+
   call Stop_shell_in_terminal(buf)
   call term_wait(buf)
+  call assert_equal('n', mode())
+  call assert_match('%aF[^\n]*finished]', execute('ls'))
 
   " closing window wipes out the terminal buffer a with finished job
   close
@@ -417,7 +422,7 @@ endfunc
 
 " must be last, we can't go back from GUI to terminal
 func Test_zz_terminal_in_gui()
-  if !has('gui')
+  if !CanRunGui()
     return
   endif
   gui -f
