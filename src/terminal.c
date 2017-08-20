@@ -38,8 +38,7 @@
  * in tl_scrollback are no longer used.
  *
  * TODO:
- * - help index for winptydll, optwin entry for winptydll
- * - make [range]terminal pipe [range] lines to the terminal
+ * - test writing lines to terminal job when implemented for MS-Windows
  * - implement term_setsize()
  * - add test for giving error for invalid 'termsize' value.
  * - support minimal size when 'termsize' is "rows*cols".
@@ -448,10 +447,14 @@ ex_terminal(exarg_T *eap)
     cmd = eap->arg;
     while (*cmd && *cmd == '+' && *(cmd + 1) == '+')
     {
-	char_u  *p;
+	char_u  *p, *ep;
 
 	cmd += 2;
 	p = skiptowhite(cmd);
+	ep = vim_strchr(cmd, '=');
+	if (ep != NULL && ep < p)
+	    p = ep;
+
 	if ((int)(p - cmd) == 5 && STRNICMP(cmd, "close", 5) == 0)
 	    opt.jo_term_finish = 'c';
 	else if ((int)(p - cmd) == 4 && STRNICMP(cmd, "open", 4) == 0)
@@ -460,6 +463,20 @@ ex_terminal(exarg_T *eap)
 	    opt.jo_curwin = 1;
 	else if ((int)(p - cmd) == 6 && STRNICMP(cmd, "hidden", 6) == 0)
 	    opt.jo_hidden = 1;
+	else if ((int)(p - cmd) == 4 && STRNICMP(cmd, "rows", 4) == 0
+		&& ep != NULL && isdigit(ep[1]))
+	{
+	    opt.jo_set2 |= JO2_TERM_ROWS;
+	    opt.jo_term_rows = atoi((char *)ep + 1);
+	    p = skiptowhite(cmd);
+	}
+	else if ((int)(p - cmd) == 4 && STRNICMP(cmd, "cols", 4) == 0
+		&& ep != NULL && isdigit(ep[1]))
+	{
+	    opt.jo_set2 |= JO2_TERM_COLS;
+	    opt.jo_term_cols = atoi((char *)ep + 1);
+	    p = skiptowhite(cmd);
+	}
 	else
 	{
 	    if (*p)
@@ -473,17 +490,14 @@ ex_terminal(exarg_T *eap)
 	/* Make a copy, an autocommand may set 'shell'. */
 	tofree = cmd = vim_strsave(p_sh);
 
-    if (eap->addr_count == 2)
+    if (eap->addr_count > 0)
     {
-	opt.jo_term_rows = eap->line1;
-	opt.jo_term_cols = eap->line2;
-    }
-    else if (eap->addr_count == 1)
-    {
-	if (cmdmod.split & WSP_VERT)
-	    opt.jo_term_cols = eap->line2;
-	else
-	    opt.jo_term_rows = eap->line2;
+	/* Write lines from current buffer to the job. */
+	opt.jo_set |= JO_IN_IO | JO_IN_BUF | JO_IN_TOP | JO_IN_BOT;
+	opt.jo_io[PART_IN] = JIO_BUFFER;
+	opt.jo_io_buf[PART_IN] = curbuf->b_fnum;
+	opt.jo_in_top = eap->line1;
+	opt.jo_in_bot = eap->line2;
     }
 
     argvar.v_type = VAR_STRING;
@@ -1079,6 +1093,29 @@ term_vgetc()
 }
 
 /*
+ * Get the part that is connected to the tty. Normally this is PART_IN, but
+ * when writing buffer lines to the job it can be another.  This makes it
+ * possible to do "1,5term vim -".
+ */
+    static ch_part_T
+get_tty_part(term_T *term)
+{
+#ifdef UNIX
+    ch_part_T	parts[3] = {PART_IN, PART_OUT, PART_ERR};
+    int		i;
+
+    for (i = 0; i < 3; ++i)
+    {
+	int fd = term->tl_job->jv_channel->ch_part[parts[i]].ch_fd;
+
+	if (isatty(fd))
+	    return parts[i];
+    }
+#endif
+    return PART_IN;
+}
+
+/*
  * Send keys to terminal.
  * Return FAIL when the key needs to be handled in Normal mode.
  * Return OK when the key was dropped or sent to the terminal.
@@ -1149,8 +1186,8 @@ send_keys_to_term(term_T *term, int c, int typed)
     len = term_convert_key(term, c, msg);
     if (len > 0)
 	/* TODO: if FAIL is returned, stop? */
-	channel_send(term->tl_job->jv_channel, PART_IN,
-						 (char_u *)msg, (int)len, NULL);
+	channel_send(term->tl_job->jv_channel, get_tty_part(term),
+						(char_u *)msg, (int)len, NULL);
 
     return OK;
 }
@@ -1271,8 +1308,6 @@ may_set_cursor_props(term_T *term)
 	    term_cursor_color(term->tl_cursor_color);
 	else
 	    term_cursor_color((char_u *)"");
-	/* do both blink and shape+blink, in case setting shape does not work */
-	term_cursor_blink(term->tl_cursor_blink);
 	term_cursor_shape(term->tl_cursor_shape, term->tl_cursor_blink);
     }
 }
@@ -1288,7 +1323,6 @@ may_restore_cursor_props(void)
     {
 	did_change_cursor = FALSE;
 	term_cursor_color((char_u *)"");
-	term_cursor_blink(FALSE);
 	/* this will restore the initial cursor style, if possible */
 	ui_cursor_shape_forced(TRUE);
     }
@@ -1336,7 +1370,8 @@ terminal_loop(void)
 
 #ifdef UNIX
     {
-	int fd = curbuf->b_term->tl_job->jv_channel->ch_part[PART_IN].ch_fd;
+	int part = get_tty_part(curbuf->b_term);
+	int fd = curbuf->b_term->tl_job->jv_channel->ch_part[part].ch_fd;
 
 	if (isatty(fd))
 	{
@@ -2827,13 +2862,20 @@ dyn_winpty_init(int verbose)
  * Return OK or FAIL.
  */
     static int
-term_and_job_init(term_T *term, int rows, int cols, typval_T *argvar, jobopt_T *opt)
+term_and_job_init(
+	term_T	    *term,
+	int	    rows,
+	int	    cols,
+	typval_T    *argvar,
+	jobopt_T    *opt)
 {
-    WCHAR	    *p = NULL;
+    WCHAR	    *cmd_wchar = NULL;
     channel_T	    *channel = NULL;
     job_T	    *job = NULL;
     DWORD	    error;
-    HANDLE	    jo = NULL, child_process_handle, child_thread_handle;
+    HANDLE	    jo = NULL;
+    HANDLE	    child_process_handle;
+    HANDLE	    child_thread_handle;
     void	    *winpty_err;
     void	    *spawn_config = NULL;
     char	    buf[MAX_PATH];
@@ -2853,8 +2895,8 @@ term_and_job_init(term_T *term, int rows, int cols, typval_T *argvar, jobopt_T *
 	cmd = ga.ga_data;
     }
 
-    p = enc_to_utf16(cmd, NULL);
-    if (p == NULL)
+    cmd_wchar = enc_to_utf16(cmd, NULL);
+    if (cmd_wchar == NULL)
 	return FAIL;
 
     job = job_alloc();
@@ -2879,7 +2921,7 @@ term_and_job_init(term_T *term, int rows, int cols, typval_T *argvar, jobopt_T *
 	    WINPTY_SPAWN_FLAG_AUTO_SHUTDOWN |
 		WINPTY_SPAWN_FLAG_EXIT_AFTER_SHUTDOWN,
 	    NULL,
-	    p,
+	    cmd_wchar,
 	    NULL,
 	    NULL,
 	    &winpty_err);
@@ -2894,20 +2936,25 @@ term_and_job_init(term_T *term, int rows, int cols, typval_T *argvar, jobopt_T *
     if (job == NULL)
 	goto failed;
 
+    /* TODO: when all lines are written and the fd is closed, the command
+     * doesn't get EOF and hangs. */
+    if (opt->jo_set & JO_IN_BUF)
+	job->jv_in_buf = buflist_findnr(opt->jo_io_buf[PART_IN]);
+
     if (!winpty_spawn(term->tl_winpty, spawn_config, &child_process_handle,
 	    &child_thread_handle, &error, &winpty_err))
 	goto failed;
 
     channel_set_pipes(channel,
-	(sock_T) CreateFileW(
+	(sock_T)CreateFileW(
 	    winpty_conin_name(term->tl_winpty),
 	    GENERIC_WRITE, 0, NULL,
 	    OPEN_EXISTING, 0, NULL),
-	(sock_T) CreateFileW(
+	(sock_T)CreateFileW(
 	    winpty_conout_name(term->tl_winpty),
 	    GENERIC_READ, 0, NULL,
 	    OPEN_EXISTING, 0, NULL),
-	(sock_T) CreateFileW(
+	(sock_T)CreateFileW(
 	    winpty_conerr_name(term->tl_winpty),
 	    GENERIC_READ, 0, NULL,
 	    OPEN_EXISTING, 0, NULL));
@@ -2924,7 +2971,7 @@ term_and_job_init(term_T *term, int rows, int cols, typval_T *argvar, jobopt_T *
     }
 
     winpty_spawn_config_free(spawn_config);
-    vim_free(p);
+    vim_free(cmd_wchar);
 
     create_vterm(term, rows, cols);
 
@@ -2947,8 +2994,8 @@ term_and_job_init(term_T *term, int rows, int cols, typval_T *argvar, jobopt_T *
 failed:
     if (argvar->v_type == VAR_LIST)
 	vim_free(ga.ga_data);
-    if (p != NULL)
-	vim_free(p);
+    if (cmd_wchar != NULL)
+	vim_free(cmd_wchar);
     if (spawn_config != NULL)
 	winpty_spawn_config_free(spawn_config);
     if (channel != NULL)
@@ -3024,7 +3071,12 @@ terminal_enabled(void)
  * Return OK or FAIL.
  */
     static int
-term_and_job_init(term_T *term, int rows, int cols, typval_T *argvar, jobopt_T *opt)
+term_and_job_init(
+	term_T	    *term,
+	int	    rows,
+	int	    cols,
+	typval_T    *argvar,
+	jobopt_T    *opt)
 {
     create_vterm(term, rows, cols);
 
