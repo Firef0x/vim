@@ -5158,7 +5158,11 @@ im_delete_preedit(void)
 	return;
     }
 
-    if (State & NORMAL)
+    if (State & NORMAL
+#ifdef FEAT_TERMINAL
+	    && !term_use_loop()
+#endif
+       )
     {
 	im_preedit_cursor = 0;
 	return;
