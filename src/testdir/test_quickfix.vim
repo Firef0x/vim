@@ -3017,3 +3017,24 @@ func Test_qf_tick()
   call Xqftick_tests('c')
   call Xqftick_tests('l')
 endfunc
+
+" The following test used to crash Vim.
+" Open the location list window and close the regular window associated with
+" the location list. When the garbage collection runs now, it incorrectly
+" marks the location list context as not in use and frees the context.
+func Test_ll_window_ctx()
+  call setloclist(0, [], 'f')
+  call setloclist(0, [], 'a', {'context' : []})
+  lopen | only
+  call test_garbagecollect_now()
+  echo getloclist(0, {'context' : 1}).context
+  enew | only
+endfunc
+
+" The following test used to crash vim
+func Test_lfile_crash()
+  sp Xtest
+  au QuickFixCmdPre * bw
+  call assert_fails('lfile', 'E40')
+  au! QuickFixCmdPre
+endfunc

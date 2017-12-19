@@ -4068,10 +4068,6 @@ ex_cfile(exarg_T *eap)
 #endif
     int		res;
 
-    if (eap->cmdidx == CMD_lfile || eap->cmdidx == CMD_lgetfile
-					       || eap->cmdidx == CMD_laddfile)
-	wp = curwin;
-
 #ifdef FEAT_AUTOCMD
     switch (eap->cmdidx)
     {
@@ -4103,6 +4099,11 @@ ex_cfile(exarg_T *eap)
 #endif
     if (*eap->arg != NUL)
 	set_string_option_direct((char_u *)"ef", -1, eap->arg, OPT_FREE, 0);
+
+    if (eap->cmdidx == CMD_lfile
+	    || eap->cmdidx == CMD_lgetfile
+	    || eap->cmdidx == CMD_laddfile)
+	wp = curwin;
 
     /*
      * This function is used by the :cfile, :cgetfile and :caddfile
@@ -5486,6 +5487,16 @@ set_ref_in_quickfix(int copyID)
 	    if (abort)
 		return abort;
 	}
+	if (IS_LL_WINDOW(win) && (win->w_llist_ref->qf_refcount == 1))
+	{
+	    /* In a location list window and none of the other windows is
+	     * referring to this location list. Mark the location list
+	     * context as still in use.
+	     */
+	    abort = mark_quickfix_ctx(win->w_llist_ref, copyID);
+	    if (abort)
+		return abort;
+	}
     }
 
     return abort;
@@ -5510,14 +5521,6 @@ ex_cbuffer(exarg_T *eap)
 #endif
     int		res;
 
-    if (eap->cmdidx == CMD_lbuffer || eap->cmdidx == CMD_lgetbuffer
-	    || eap->cmdidx == CMD_laddbuffer)
-    {
-	qi = ll_get_or_alloc_list(curwin);
-	if (qi == NULL)
-	    return;
-    }
-
 #ifdef FEAT_AUTOCMD
     switch (eap->cmdidx)
     {
@@ -5538,6 +5541,15 @@ ex_cbuffer(exarg_T *eap)
 # endif
     }
 #endif
+
+    /* Must come after autocommands. */
+    if (eap->cmdidx == CMD_lbuffer || eap->cmdidx == CMD_lgetbuffer
+	    || eap->cmdidx == CMD_laddbuffer)
+    {
+	qi = ll_get_or_alloc_list(curwin);
+	if (qi == NULL)
+	    return;
+    }
 
     if (*eap->arg == NUL)
 	buf = curbuf;
