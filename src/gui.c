@@ -2886,6 +2886,7 @@ gui_insert_lines(int row, int count)
     }
 }
 
+#ifdef FEAT_TIMERS
 /*
  * Passed to ui_wait_for_chars_or_timer(), ignoring extra arguments.
  */
@@ -2897,6 +2898,7 @@ gui_wait_for_chars_3(
 {
     return gui_mch_wait_for_chars(wtime);
 }
+#endif
 
 /*
  * Returns OK if a character was found to be available within the given time,
