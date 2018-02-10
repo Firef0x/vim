@@ -1682,17 +1682,28 @@ ins_redraw(
 #ifdef FEAT_AUTOCMD
     /* Trigger TextChangedI if b_changedtick differs. */
     if (ready && has_textchangedI()
-	    && last_changedtick != CHANGEDTICK(curbuf)
+	    && curbuf->b_last_changedtick != CHANGEDTICK(curbuf)
 # ifdef FEAT_INS_EXPAND
 	    && !pum_visible()
 # endif
 	    )
     {
-	if (last_changedtick_buf == curbuf)
-	    apply_autocmds(EVENT_TEXTCHANGEDI, NULL, NULL, FALSE, curbuf);
-	last_changedtick_buf = curbuf;
-	last_changedtick = CHANGEDTICK(curbuf);
+	apply_autocmds(EVENT_TEXTCHANGEDI, NULL, NULL, FALSE, curbuf);
+	curbuf->b_last_changedtick = CHANGEDTICK(curbuf);
     }
+
+# ifdef FEAT_INS_EXPAND
+    /* Trigger TextChangedP if b_changedtick differs. When the popupmenu closes
+     * TextChangedI will need to trigger for backwards compatibility, thus use
+     * different b_last_changedtick* variables. */
+    if (ready && has_textchangedP()
+	    && curbuf->b_last_changedtick_pum != CHANGEDTICK(curbuf)
+	    && pum_visible())
+    {
+	apply_autocmds(EVENT_TEXTCHANGEDP, NULL, NULL, FALSE, curbuf);
+	curbuf->b_last_changedtick_pum = CHANGEDTICK(curbuf);
+    }
+# endif
 #endif
 
     if (must_redraw)
@@ -2928,7 +2939,7 @@ ins_compl_del_pum(void)
     if (compl_match_array != NULL)
     {
 	pum_undisplay();
-	vim_clear((void **)&compl_match_array);
+	VIM_CLEAR(compl_match_array);
     }
 }
 
@@ -3430,8 +3441,8 @@ ins_compl_free(void)
     compl_T *match;
     int	    i;
 
-    vim_clear((void **)&compl_pattern);
-    vim_clear((void **)&compl_leader);
+    VIM_CLEAR(compl_pattern);
+    VIM_CLEAR(compl_leader);
 
     if (compl_first_match == NULL)
 	return;
@@ -3463,10 +3474,10 @@ ins_compl_clear(void)
     compl_cont_status = 0;
     compl_started = FALSE;
     compl_matches = 0;
-    vim_clear((void **)&compl_pattern);
-    vim_clear((void **)&compl_leader);
+    VIM_CLEAR(compl_pattern);
+    VIM_CLEAR(compl_leader);
     edit_submode_extra = NULL;
-    vim_clear((void **)&compl_orig_text);
+    VIM_CLEAR(compl_orig_text);
     compl_enter_selects = FALSE;
     /* clear v:completed_item */
     set_vim_var_dict(VV_COMPLETED_ITEM, dict_alloc_lock(VAR_FIXED));
@@ -4236,6 +4247,8 @@ ins_compl_add_tv(typval_T *tv, int dir)
 						     (char_u *)"kind", FALSE);
 	cptext[CPT_INFO] = get_dict_string(tv->vval.v_dict,
 						     (char_u *)"info", FALSE);
+	cptext[CPT_USER_DATA] = get_dict_string(tv->vval.v_dict,
+						 (char_u *)"user_data", FALSE);
 	if (get_dict_string(tv->vval.v_dict, (char_u *)"icase", FALSE) != NULL)
 	    icase = get_dict_number(tv->vval.v_dict, (char_u *)"icase");
 	if (get_dict_string(tv->vval.v_dict, (char_u *)"dup", FALSE) != NULL)
@@ -4758,6 +4771,8 @@ ins_compl_insert(int in_compl_func)
 		    EMPTY_IF_NULL(compl_shown_match->cp_text[CPT_KIND]));
 	dict_add_nr_str(dict, "info", 0L,
 		    EMPTY_IF_NULL(compl_shown_match->cp_text[CPT_INFO]));
+	dict_add_nr_str(dict, "user_data", 0L,
+		    EMPTY_IF_NULL(compl_shown_match->cp_text[CPT_USER_DATA]));
     }
     set_vim_var_dict(VV_COMPLETED_ITEM, dict);
     if (!in_compl_func)
@@ -5569,8 +5584,8 @@ ins_complete(int c, int enable_pum)
 	if (compl_orig_text == NULL || ins_compl_add(compl_orig_text,
 			-1, p_ic, NULL, NULL, 0, ORIGINAL_TEXT, FALSE) != OK)
 	{
-	    vim_clear((void **)&compl_pattern);
-	    vim_clear((void **)&compl_orig_text);
+	    VIM_CLEAR(compl_pattern);
+	    VIM_CLEAR(compl_orig_text);
 	    return FAIL;
 	}
 
@@ -7265,9 +7280,9 @@ set_last_insert(int c)
     void
 free_last_insert(void)
 {
-    vim_clear((void **)&last_insert);
+    VIM_CLEAR(last_insert);
 # ifdef FEAT_INS_EXPAND
-    vim_clear((void **)&compl_orig_text);
+    VIM_CLEAR(compl_orig_text);
 # endif
 }
 #endif
@@ -7895,7 +7910,7 @@ mb_replace_pop_ins(int cc)
     static void
 replace_flush(void)
 {
-    vim_clear((void **)&replace_stack);
+    VIM_CLEAR(replace_stack);
     replace_stack_len = 0;
     replace_stack_nr = 0;
 }

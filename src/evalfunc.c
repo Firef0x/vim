@@ -1447,6 +1447,8 @@ f_balloon_split(typval_T *argvars, typval_T *rettv UNUSED)
 	    /* Skip the first and last item, they are always empty. */
 	    for (i = 1; i < size - 1; ++i)
 		list_append_string(rettv->vval.v_list, array[i].pum_text, -1);
+	    while (size > 0)
+		vim_free(array[--size].pum_text);
 	    vim_free(array);
 	}
     }
@@ -9220,10 +9222,7 @@ f_resolve(typval_T *argvars, typval_T *rettv)
 	    if (*q != NUL)
 		STRMOVE(remain, q - 1);
 	    else
-	    {
-		vim_free(remain);
-		remain = NULL;
-	    }
+		VIM_CLEAR(remain);
 	}
 
 	/* If the result is a relative path name, make it explicitly relative to
