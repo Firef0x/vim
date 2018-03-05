@@ -740,9 +740,7 @@ EXTERN char_u	*p_pp;		/* 'packpath' */
 EXTERN char_u	*p_rtp;		/* 'runtimepath' */
 EXTERN long	p_sj;		/* 'scrolljump' */
 EXTERN long	p_so;		/* 'scrolloff' */
-#ifdef FEAT_SCROLLBIND
 EXTERN char_u	*p_sbo;		/* 'scrollopt' */
-#endif
 EXTERN char_u	*p_sections;	/* 'sections' */
 EXTERN int	p_secure;	/* 'secure' */
 EXTERN char_u	*p_sel;		/* 'selection' */
@@ -1134,9 +1132,7 @@ enum
     , WV_TK
     , WV_TMS
 #endif
-#ifdef FEAT_CURSORBIND
     , WV_CRBIND
-#endif
 #ifdef FEAT_LINEBREAK
     , WV_BRI
     , WV_BRIOPT
@@ -1173,9 +1169,7 @@ enum
     , WV_RL
     , WV_RLC
 #endif
-#ifdef FEAT_SCROLLBIND
     , WV_SCBIND
-#endif
     , WV_SCROLL
 #ifdef FEAT_SPELL
     , WV_SPELL

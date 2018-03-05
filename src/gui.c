@@ -1077,7 +1077,7 @@ gui_update_cursor(
 	gui_undraw_cursor();
 	if (gui.row < 0)
 	    return;
-#ifdef FEAT_MBYTE
+#ifdef HAVE_INPUT_METHOD
 	if (gui.row != gui.cursor_row || gui.col != gui.cursor_col)
 	    im_set_position(gui.row, gui.col);
 #endif
@@ -1135,7 +1135,7 @@ gui_update_cursor(
 	if (id > 0)
 	{
 	    cattr = syn_id2colors(id, &cfg, &cbg);
-#if defined(FEAT_MBYTE) || defined(FEAT_HANGULIN)
+#if defined(HAVE_INPUT_METHOD) || defined(FEAT_HANGULIN)
 	    {
 		static int iid;
 		guicolor_T fg, bg;
@@ -3960,9 +3960,7 @@ gui_drag_scrollbar(scrollbar_T *sb, long value, int still_dragging)
     int		sb_num;
 #ifdef USE_ON_FLY_SCROLL
     colnr_T	old_leftcol = curwin->w_leftcol;
-# ifdef FEAT_SCROLLBIND
     linenr_T	old_topline = curwin->w_topline;
-# endif
 # ifdef FEAT_DIFF
     int		old_topfill = curwin->w_topfill;
 # endif
@@ -4127,16 +4125,15 @@ gui_drag_scrollbar(scrollbar_T *sb, long value, int still_dragging)
     }
 
 #ifdef USE_ON_FLY_SCROLL
-# ifdef FEAT_SCROLLBIND
     /*
      * synchronize other windows, as necessary according to 'scrollbind'
      */
     if (curwin->w_p_scb
 	    && ((sb->wp == NULL && curwin->w_leftcol != old_leftcol)
 		|| (sb->wp == curwin && (curwin->w_topline != old_topline
-#  ifdef FEAT_DIFF
+# ifdef FEAT_DIFF
 					   || curwin->w_topfill != old_topfill
-#  endif
+# endif
 			))))
     {
 	do_check_scrollbind(TRUE);
@@ -4146,7 +4143,6 @@ gui_drag_scrollbar(scrollbar_T *sb, long value, int still_dragging)
 		updateWindow(wp);
 	setcursor();
     }
-# endif
     out_flush_cursor(FALSE, TRUE);
 #else
     add_to_input_buf(bytes, byte_count);
@@ -4475,9 +4471,7 @@ gui_do_scroll(void)
 	}
 	if (old_cursor.lnum != wp->w_cursor.lnum)
 	    coladvance(wp->w_curswant);
-#ifdef FEAT_SCROLLBIND
 	wp->w_scbind_pos = wp->w_topline;
-#endif
     }
 
     /* Make sure wp->w_leftcol and wp->w_skipcol are correct. */
