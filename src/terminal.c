@@ -38,45 +38,34 @@
  * in tl_scrollback are no longer used.
  *
  * TODO:
- * - Add a flag to kill the job when Vim is exiting.  Useful when it's showing
- *   a logfile.  Or send keys there to make it quit: "exit\r" for a shell.
  * - When using 'termguicolors' still use the 16 ANSI colors as-is.  Helps for
+ * - In the GUI use a terminal emulator for :!cmd.  Make the height the same as
+ *   the window and position it higher up when it gets filled, so it looks like
+ *   the text scrolls up.
+ * - implement term_setsize()
+ * - Copy text in the vterm to the Vim buffer once in a while, so that
+ *   completion works.
  * - Adding WinBar to terminal window doesn't display, text isn't shifted down.
  *   a job that uses 16 colors while Vim is using > 256.
  * - in GUI vertical split causes problems.  Cursor is flickering. (Hirohito
  *   Higashi, 2017 Sep 19)
- * - Trigger TerminalOpen event?  #2422  patch in #2484
  * - after resizing windows overlap. (Boris Staletic, #2164)
  * - Redirecting output does not work on MS-Windows, Test_terminal_redir_file()
  *   is disabled.
- * - if the job in the terminal does not support the mouse, we can use the
- *   mouse in the Terminal window for copy/paste and scrolling.
  * - cursor blinks in terminal on widows with a timer. (xtal8, #2142)
- * - When closing gvim with an active terminal buffer, the dialog suggests
- *   saving the buffer.  Should say something else. (Manas Thakur, #2215)
- *   Also: #2223
  * - Termdebug does not work when Vim build with mzscheme.  gdb hangs.
  * - MS-Windows GUI: WinBar has  tearoff item
  * - MS-Windows GUI: still need to type a key after shell exits?  #1924
  * - After executing a shell command the status line isn't redraw.
- * - implement term_setsize()
  * - add test for giving error for invalid 'termsize' value.
  * - support minimal size when 'termsize' is "rows*cols".
  * - support minimal size when 'termsize' is empty?
  * - GUI: when using tabs, focus in terminal, click on tab does not work.
- * - GUI: when 'confirm' is set and trying to exit Vim, dialog offers to save
- *   changes to "!shell".
- *   (justrajdeep, 2017 Aug 22)
  * - Redrawing is slow with Athena and Motif.  Also other GUI? (Ramel Eshed)
  * - For the GUI fill termios with default values, perhaps like pangoterm:
  *   http://bazaar.launchpad.net/~leonerd/pangoterm/trunk/view/head:/main.c#L134
  * - when 'encoding' is not utf-8, or the job is using another encoding, setup
  *   conversions.
- * - In the GUI use a terminal emulator for :!cmd.  Make the height the same as
- *   the window and position it higher up when it gets filled, so it looks like
- *   the text scrolls up.
- * - Copy text in the vterm to the Vim buffer once in a while, so that
- *   completion works.
  * - add an optional limit for the scrollback size.  When reaching it remove
  *   10% at the start.
  */
@@ -582,6 +571,8 @@ term_start(typval_T *argvar, jobopt_T *opt, int without_job, int forceit)
 	term_close_buffer(curbuf, old_curbuf);
 	return NULL;
     }
+
+    apply_autocmds(EVENT_TERMINALOPEN, NULL, NULL, FALSE, curbuf);
     return newbuf;
 }
 
@@ -907,6 +898,105 @@ term_send_mouse(VTerm *vterm, int button, int pressed)
     return TRUE;
 }
 
+static int enter_mouse_col = -1;
+static int enter_mouse_row = -1;
+
+/*
+ * Handle a mouse click, drag or release.
+ * Return TRUE when a mouse event is sent to the terminal.
+ */
+    static int
+term_mouse_click(VTerm *vterm, int key)
+{
+#if defined(FEAT_CLIPBOARD)
+    /* For modeless selection mouse drag and release events are ignored, unless
+     * they are preceded with a mouse down event */
+    static int	    ignore_drag_release = TRUE;
+    VTermMouseState mouse_state;
+
+    vterm_state_get_mousestate(vterm_obtain_state(vterm), &mouse_state);
+    if (mouse_state.flags == 0)
+    {
+	/* Terminal is not using the mouse, use modeless selection. */
+	switch (key)
+	{
+	case K_LEFTDRAG:
+	case K_LEFTRELEASE:
+	case K_RIGHTDRAG:
+	case K_RIGHTRELEASE:
+		/* Ignore drag and release events when the button-down wasn't
+		 * seen before. */
+		if (ignore_drag_release)
+		{
+		    int save_mouse_col, save_mouse_row;
+
+		    if (enter_mouse_col < 0)
+			break;
+
+		    /* mouse click in the window gave us focus, handle that
+		     * click now */
+		    save_mouse_col = mouse_col;
+		    save_mouse_row = mouse_row;
+		    mouse_col = enter_mouse_col;
+		    mouse_row = enter_mouse_row;
+		    clip_modeless(MOUSE_LEFT, TRUE, FALSE);
+		    mouse_col = save_mouse_col;
+		    mouse_row = save_mouse_row;
+		}
+		/* FALLTHROUGH */
+	case K_LEFTMOUSE:
+	case K_RIGHTMOUSE:
+		if (key == K_LEFTRELEASE || key == K_RIGHTRELEASE)
+		    ignore_drag_release = TRUE;
+		else
+		    ignore_drag_release = FALSE;
+		/* Should we call mouse_has() here? */
+		if (clip_star.available)
+		{
+		    int	    button, is_click, is_drag;
+
+		    button = get_mouse_button(KEY2TERMCAP1(key),
+							 &is_click, &is_drag);
+		    if (mouse_model_popup() && button == MOUSE_LEFT
+					       && (mod_mask & MOD_MASK_SHIFT))
+		    {
+			/* Translate shift-left to right button. */
+			button = MOUSE_RIGHT;
+			mod_mask &= ~MOD_MASK_SHIFT;
+		    }
+		    clip_modeless(button, is_click, is_drag);
+		}
+		break;
+
+	case K_MIDDLEMOUSE:
+		if (clip_star.available)
+		    insert_reg('*', TRUE);
+		break;
+	}
+	enter_mouse_col = -1;
+	return FALSE;
+    }
+#endif
+    enter_mouse_col = -1;
+
+    switch (key)
+    {
+	case K_LEFTMOUSE:
+	case K_LEFTMOUSE_NM:	term_send_mouse(vterm, 1, 1); break;
+	case K_LEFTDRAG:	term_send_mouse(vterm, 1, 1); break;
+	case K_LEFTRELEASE:
+	case K_LEFTRELEASE_NM:	term_send_mouse(vterm, 1, 0); break;
+	case K_MOUSEMOVE:	term_send_mouse(vterm, 0, 0); break;
+	case K_MIDDLEMOUSE:	term_send_mouse(vterm, 2, 1); break;
+	case K_MIDDLEDRAG:	term_send_mouse(vterm, 2, 1); break;
+	case K_MIDDLERELEASE:	term_send_mouse(vterm, 2, 0); break;
+	case K_RIGHTMOUSE:	term_send_mouse(vterm, 3, 1); break;
+	case K_RIGHTDRAG:	term_send_mouse(vterm, 3, 1); break;
+	case K_RIGHTRELEASE:	term_send_mouse(vterm, 3, 0); break;
+    }
+    return TRUE;
+}
+
 /*
  * Convert typed key "c" into bytes to send to the job.
  * Return the number of bytes in "buf".
@@ -1002,17 +1092,21 @@ term_convert_key(term_T *term, int c, char *buf)
 	case K_MOUSERIGHT:	/* TODO */ return 0;
 
 	case K_LEFTMOUSE:
-	case K_LEFTMOUSE_NM:	other = term_send_mouse(vterm, 1, 1); break;
-	case K_LEFTDRAG:	other = term_send_mouse(vterm, 1, 1); break;
+	case K_LEFTMOUSE_NM:
+	case K_LEFTDRAG:
 	case K_LEFTRELEASE:
-	case K_LEFTRELEASE_NM:	other = term_send_mouse(vterm, 1, 0); break;
-	case K_MOUSEMOVE:	other = term_send_mouse(vterm, 0, 0); break;
-	case K_MIDDLEMOUSE:	other = term_send_mouse(vterm, 2, 1); break;
-	case K_MIDDLEDRAG:	other = term_send_mouse(vterm, 2, 1); break;
-	case K_MIDDLERELEASE:	other = term_send_mouse(vterm, 2, 0); break;
-	case K_RIGHTMOUSE:	other = term_send_mouse(vterm, 3, 1); break;
-	case K_RIGHTDRAG:	other = term_send_mouse(vterm, 3, 1); break;
-	case K_RIGHTRELEASE:	other = term_send_mouse(vterm, 3, 0); break;
+	case K_LEFTRELEASE_NM:
+	case K_MOUSEMOVE:
+	case K_MIDDLEMOUSE:
+	case K_MIDDLEDRAG:
+	case K_MIDDLERELEASE:
+	case K_RIGHTMOUSE:
+	case K_RIGHTDRAG:
+	case K_RIGHTRELEASE:	if (!term_mouse_click(vterm, c))
+				    return 0;
+				other = TRUE;
+				break;
+
 	case K_X1MOUSE:		/* TODO */ return 0;
 	case K_X1DRAG:		/* TODO */ return 0;
 	case K_X1RELEASE:	/* TODO */ return 0;
@@ -1480,6 +1574,8 @@ term_vgetc()
     return c;
 }
 
+static int	mouse_was_outside = FALSE;
+
 /*
  * Send keys to terminal.
  * Return FAIL when the key needs to be handled in Normal mode.
@@ -1490,7 +1586,6 @@ send_keys_to_term(term_T *term, int c, int typed)
 {
     char	msg[KEY_BUF_LEN];
     size_t	len;
-    static int	mouse_was_outside = FALSE;
     int		dragging_outside = FALSE;
 
     /* Catch keys that need to be handled as in Normal mode. */
@@ -1736,6 +1831,29 @@ prepare_restore_cursor_props(void)
     desired_cursor_shape = -1;
     desired_cursor_blink = -1;
     may_output_cursor_props();
+}
+
+/*
+ * Called when entering a window with the mouse.  If this is a terminal window
+ * we may want to change state.
+ */
+    void
+term_win_entered()
+{
+    term_T *term = curbuf->b_term;
+
+    if (term != NULL)
+    {
+	if (term_use_loop())
+	{
+	    reset_VIsual_and_resel();
+	    if (State & INSERT)
+		stop_insert_mode = TRUE;
+	}
+	mouse_was_outside = FALSE;
+	enter_mouse_col = mouse_col;
+	enter_mouse_row = mouse_row;
+    }
 }
 
 /*
