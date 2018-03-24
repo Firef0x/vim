@@ -968,3 +968,58 @@ func Test_terminal_open_autocmd()
   unlet s:called
   au! repro
 endfunction
+
+func Check_dump01(off)
+  call assert_equal('one two three four five', trim(getline(a:off + 1)))
+  call assert_equal('~           Select Word', trim(getline(a:off + 7)))
+  call assert_equal(':popup PopUp                                   :', trim(getline(a:off + 20)))
+endfunc
+
+" just testing basic functionality.
+func Test_terminal_dumpload()
+  call assert_equal(1, winnr('$'))
+  call term_dumpload('dumps/Test_popup_command_01.dump')
+  call assert_equal(2, winnr('$'))
+  call assert_equal(20, line('$'))
+  call Check_dump01(0)
+  quit
+endfunc
+
+func Test_terminal_dumpdiff()
+  call assert_equal(1, winnr('$'))
+  call term_dumpdiff('dumps/Test_popup_command_01.dump', 'dumps/Test_popup_command_02.dump')
+  call assert_equal(2, winnr('$'))
+  call assert_equal(62, line('$'))
+  call Check_dump01(0)
+  call Check_dump01(42)
+  call assert_equal('           bbbbbbbbbbbbbbbbbb ', getline(26)[0:29])
+  quit
+endfunc
+
+func Test_terminal_dumpdiff_options()
+  set laststatus=0
+  call assert_equal(1, winnr('$'))
+  let height = winheight(0)
+  call term_dumpdiff('dumps/Test_popup_command_01.dump', 'dumps/Test_popup_command_02.dump', {'vertical': 1, 'term_cols': 33})
+  call assert_equal(2, winnr('$'))
+  call assert_equal(height, winheight(winnr()))
+  call assert_equal(33, winwidth(winnr()))
+  call assert_equal('dump diff dumps/Test_popup_command_01.dump', bufname('%'))
+  quit
+
+  call assert_equal(1, winnr('$'))
+  let width = winwidth(0)
+  call term_dumpdiff('dumps/Test_popup_command_01.dump', 'dumps/Test_popup_command_02.dump', {'vertical': 0, 'term_rows': 13, 'term_name': 'something else'})
+  call assert_equal(2, winnr('$'))
+  call assert_equal(width, winwidth(winnr()))
+  call assert_equal(13, winheight(winnr()))
+  call assert_equal('something else', bufname('%'))
+  quit
+
+  call assert_equal(1, winnr('$'))
+  call term_dumpdiff('dumps/Test_popup_command_01.dump', 'dumps/Test_popup_command_02.dump', {'curwin': 1})
+  call assert_equal(1, winnr('$'))
+  bwipe
+
+  set laststatus&
+endfunc
