@@ -237,8 +237,9 @@ getcmdline(
     int		old_topfill;
     int		init_topfill = curwin->w_topfill;
 # endif
-    linenr_T	old_botline;
+    linenr_T	old_botline, old_empty_rows;
     linenr_T	init_botline = curwin->w_botline;
+    linenr_T	init_empty_rows = curwin->w_empty_rows;
     int		did_incsearch = FALSE;
     int		incsearch_postponed = FALSE;
 #endif
@@ -291,6 +292,7 @@ getcmdline(
     old_topfill = curwin->w_topfill;
 # endif
     old_botline = curwin->w_botline;
+    old_empty_rows = curwin->w_empty_rows;
 #endif
 
     /*
@@ -1075,6 +1077,7 @@ getcmdline(
 			old_topfill = init_topfill;
 # endif
 			old_botline = init_botline;
+			old_empty_rows = init_empty_rows;
 		    }
 #endif
 		    redrawcmd();
@@ -1804,6 +1807,7 @@ getcmdline(
 			old_topfill = curwin->w_topfill;
 # endif
 			old_botline = curwin->w_botline;
+			old_empty_rows = curwin->w_empty_rows;
 			update_screen(NOT_VALID);
 			redrawcmdline();
 		    }
@@ -1972,7 +1976,7 @@ cmdline_changed:
 	    if (ccline.cmdlen == 0)
 	    {
 		i = 0;
-		SET_NO_HLSEARCH(TRUE); /* turn off previous highlight */
+		set_no_hlsearch(TRUE); /* turn off previous highlight */
 		redraw_all_later(SOME_VALID);
 	    }
 	    else
@@ -2020,6 +2024,7 @@ cmdline_changed:
 	    curwin->w_topfill = old_topfill;
 # endif
 	    curwin->w_botline = old_botline;
+	    curwin->w_empty_rows = old_empty_rows;
 	    changed_cline_bef_curs();
 	    update_topline();
 
@@ -2040,7 +2045,7 @@ cmdline_changed:
 	    /* Disable 'hlsearch' highlighting if the pattern matches
 	     * everything. Avoids a flash when typing "foo\|". */
 	    if (empty_pattern(ccline.cmdbuff))
-		SET_NO_HLSEARCH(TRUE);
+		set_no_hlsearch(TRUE);
 
 	    validate_cursor();
 	    /* May redraw the status line to show the cursor position. */
@@ -2114,6 +2119,7 @@ returncmd:
 	curwin->w_topfill = old_topfill;
 # endif
 	curwin->w_botline = old_botline;
+	curwin->w_empty_rows = old_empty_rows;
 	highlight_match = FALSE;
 	validate_cursor();	/* needed for TAB */
 	redraw_all_later(SOME_VALID);
