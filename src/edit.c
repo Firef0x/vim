@@ -1016,6 +1016,19 @@ edit(
 		goto doESCkey;
 	    }
 #endif
+#ifdef FEAT_JOB_CHANNEL
+	    if (c == Ctrl_C && bt_prompt(curbuf))
+	    {
+		if (invoke_prompt_interrupt())
+		{
+		    if (!bt_prompt(curbuf))
+			// buffer changed to a non-prompt buffer, get out of
+			// Insert mode
+			goto doESCkey;
+		    break;
+		}
+	    }
+#endif
 
 #ifdef UNIX
 do_intr:
@@ -1179,7 +1192,7 @@ doESCkey:
 		// In a prompt window CTRL-W is used for window commands.
 		// Use Shift-CTRL-W to delete a word.
 		stuffcharReadbuff(Ctrl_W);
-		restart_edit = 'i';
+		restart_edit = 'A';
 		nomove = TRUE;
 		count = 0;
 		goto doESCkey;
