@@ -1115,6 +1115,10 @@ enum
 #ifdef FEAT_TERMINAL
     , BV_TWSL
 #endif
+#ifdef FEAT_VARTABS
+    , BV_VSTS
+    , BV_VTS
+#endif
     , BV_COUNT	    /* must be the last one */
 };
 

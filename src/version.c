@@ -37,7 +37,7 @@ char	longVersion[sizeof(VIM_VERSION_LONG_DATE) + sizeof(__DATE__)
 						      + sizeof(__TIME__) + 3];
 
     void
-make_version(void)
+init_longVersion(void)
 {
     /*
      * Construct the long version string.  Necessary because
@@ -49,8 +49,25 @@ make_version(void)
     strcat(longVersion, __TIME__);
     strcat(longVersion, ")");
 }
+
 # else
-char	*longVersion = VIM_VERSION_LONG_DATE __DATE__ " " __TIME__ ")";
+    void
+init_longVersion(void)
+{
+    char *date_time = __DATE__ " " __TIME__;
+    char *msg = _("%s (%s, compiled %s)");
+    size_t len = strlen(msg)
+		+ strlen(VIM_VERSION_LONG_ONLY)
+		+ strlen(VIM_VERSION_DATE_ONLY)
+		+ strlen(date_time);
+
+    longVersion = (char *)alloc(len);
+    if (longVersion == NULL)
+	longVersion = VIM_VERSION_LONG;
+    else
+	vim_snprintf(longVersion, len, msg,
+		      VIM_VERSION_LONG_ONLY, VIM_VERSION_DATE_ONLY, date_time);
+}
 # endif
 #else
 char	*longVersion = VIM_VERSION_LONG;
@@ -660,6 +677,11 @@ static char *(features[]) =
 #else
 	"-user_commands",
 #endif
+#ifdef FEAT_VARTABS
+	"+vartabs",
+#else
+	"-vartabs",
+#endif
 	"+vertsplit",
 #ifdef FEAT_VIRTUALEDIT
 	"+virtualedit",
@@ -761,6 +783,22 @@ static char *(features[]) =
 
 static int included_patches[] =
 {   /* Add new patch number below this line */
+/**/
+    105,
+/**/
+    104,
+/**/
+    103,
+/**/
+    102,
+/**/
+    101,
+/**/
+    100,
+/**/
+    99,
+/**/
+    98,
 /**/
     97,
 /**/
@@ -1138,6 +1176,7 @@ list_version(void)
      * When adding features here, don't forget to update the list of
      * internal variables in eval.c!
      */
+    init_longVersion();
     MSG(longVersion);
 #ifdef WIN3264
 # ifdef FEAT_GUI_W32
