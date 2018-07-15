@@ -367,7 +367,7 @@ static char_u e_unmatchedp[] = N_("E54: Unmatched %s(");
 static char_u e_unmatchedpar[] = N_("E55: Unmatched %s)");
 #ifdef FEAT_SYN_HL
 static char_u e_z_not_allowed[] = N_("E66: \\z( not allowed here");
-static char_u e_z1_not_allowed[] = N_("E67: \\z1 et al. not allowed here");
+static char_u e_z1_not_allowed[] = N_("E67: \\z1 - \\z9 not allowed here");
 #endif
 static char_u e_missing_sb[] = N_("E69: Missing ] after %s%%[");
 static char_u e_empty_sb[]  = N_("E70: Empty %s%%[]");
@@ -695,9 +695,9 @@ static void	skipchr_keepstart(void);
 static int	peekchr(void);
 static void	skipchr(void);
 static void	ungetchr(void);
-static int	gethexchrs(int maxinputlen);
-static int	getoctchrs(void);
-static int	getdecchrs(void);
+static long	gethexchrs(int maxinputlen);
+static long	getoctchrs(void);
+static long	getdecchrs(void);
 static int	coll_get_char(void);
 static void	regcomp_start(char_u *expr, int flags);
 static char_u	*reg(int, int *);
@@ -1837,7 +1837,7 @@ regpiece(int *flagp)
 	case Magic('@'):
 	    {
 		int	lop = END;
-		int	nr;
+		long	nr;
 
 		nr = getdecchrs();
 		switch (no_Magic(getchr()))
@@ -1997,7 +1997,7 @@ regatom(int *flagp)
 	    goto collection;
 
 	/* "\_x" is character class plus newline */
-	/*FALLTHROUGH*/
+	/* FALLTHROUGH */
 
 	/*
 	 * Character classes.
@@ -2139,7 +2139,7 @@ regatom(int *flagp)
 	    switch (c)
 	    {
 #ifdef FEAT_SYN_HL
-		case '(': if (reg_do_extmatch != REX_SET)
+		case '(': if ((reg_do_extmatch & REX_SET) == 0)
 			      EMSG_RET_NULL(_(e_z_not_allowed));
 			  if (one_exactly)
 			      EMSG_ONE_RET_NULL;
@@ -2158,7 +2158,7 @@ regatom(int *flagp)
 		case '6':
 		case '7':
 		case '8':
-		case '9': if (reg_do_extmatch != REX_USE)
+		case '9': if ((reg_do_extmatch & REX_USE) == 0)
 			      EMSG_RET_NULL(_(e_z1_not_allowed));
 			  ret = regnode(ZREF + c - '0');
 			  re_has_z = REX_USE;
@@ -2278,7 +2278,7 @@ regatom(int *flagp)
 		case 'u':   /* %uabcd hex 4 */
 		case 'U':   /* %U1234abcd hex 8 */
 			  {
-			      int i;
+			      long i;
 
 			      switch (c)
 			      {
@@ -3274,10 +3274,10 @@ ungetchr(void)
  * The parameter controls the maximum number of input characters. This will be
  * 2 when reading a \%x20 sequence and 4 when reading a \%u20AC sequence.
  */
-    static int
+    static long
 gethexchrs(int maxinputlen)
 {
-    int		nr = 0;
+    long_u	nr = 0;
     int		c;
     int		i;
 
@@ -3293,17 +3293,17 @@ gethexchrs(int maxinputlen)
 
     if (i == 0)
 	return -1;
-    return nr;
+    return (long)nr;
 }
 
 /*
  * Get and return the value of the decimal string immediately after the
  * current position. Return -1 for invalid.  Consumes all digits.
  */
-    static int
+    static long
 getdecchrs(void)
 {
-    int		nr = 0;
+    long_u	nr = 0;
     int		c;
     int		i;
 
@@ -3320,7 +3320,7 @@ getdecchrs(void)
 
     if (i == 0)
 	return -1;
-    return nr;
+    return (long)nr;
 }
 
 /*
@@ -3331,10 +3331,10 @@ getdecchrs(void)
  *     blahblah\%o210asdf
  *	   before-^  ^-after
  */
-    static int
+    static long
 getoctchrs(void)
 {
-    int		nr = 0;
+    long_u	nr = 0;
     int		c;
     int		i;
 
@@ -3350,7 +3350,7 @@ getoctchrs(void)
 
     if (i == 0)
 	return -1;
-    return nr;
+    return (long)nr;
 }
 
 /*
@@ -3360,7 +3360,7 @@ getoctchrs(void)
     static int
 coll_get_char(void)
 {
-    int	    nr = -1;
+    long	nr = -1;
 
     switch (*regparse++)
     {
@@ -3996,10 +3996,7 @@ theend:
     /* Free "reg_tofree" when it's a bit big.
      * Free regstack and backpos if they are bigger than their initial size. */
     if (reg_tofreelen > 400)
-    {
-	vim_free(reg_tofree);
-	reg_tofree = NULL;
-    }
+	VIM_CLEAR(reg_tofree);
     if (regstack.ga_maxlen > REGSTACK_INITIAL)
 	ga_clear(&regstack);
     if (backpos.ga_maxlen > BACKPOS_INITIAL)
@@ -5588,9 +5585,14 @@ regmatch(
 		    {
 #ifdef FEAT_MBYTE
 			if (has_mbyte)
+			{
+			    char_u *line =
+					 reg_getline(behind_pos.rs_u.pos.lnum);
+
 			    rp->rs_un.regsave.rs_u.pos.col -=
-				(*mb_head_off)(regline, regline
+				(*mb_head_off)(line, line
 				    + rp->rs_un.regsave.rs_u.pos.col - 1) + 1;
+			}
 			else
 #endif
 			    --rp->rs_un.regsave.rs_u.pos.col;
@@ -5847,7 +5849,7 @@ regrepeat(
       case IDENT:
       case IDENT + ADD_NL:
 	testval = TRUE;
-	/*FALLTHROUGH*/
+	/* FALLTHROUGH */
       case SIDENT:
       case SIDENT + ADD_NL:
 	while (count < maxcount)
@@ -5877,7 +5879,7 @@ regrepeat(
       case KWORD:
       case KWORD + ADD_NL:
 	testval = TRUE;
-	/*FALLTHROUGH*/
+	/* FALLTHROUGH */
       case SKWORD:
       case SKWORD + ADD_NL:
 	while (count < maxcount)
@@ -5908,7 +5910,7 @@ regrepeat(
       case FNAME:
       case FNAME + ADD_NL:
 	testval = TRUE;
-	/*FALLTHROUGH*/
+	/* FALLTHROUGH */
       case SFNAME:
       case SFNAME + ADD_NL:
 	while (count < maxcount)
@@ -5938,7 +5940,7 @@ regrepeat(
       case PRINT:
       case PRINT + ADD_NL:
 	testval = TRUE;
-	/*FALLTHROUGH*/
+	/* FALLTHROUGH */
       case SPRINT:
       case SPRINT + ADD_NL:
 	while (count < maxcount)
@@ -6131,7 +6133,7 @@ do_class:
       case ANYOF:
       case ANYOF + ADD_NL:
 	testval = TRUE;
-	/*FALLTHROUGH*/
+	/* FALLTHROUGH */
 
       case ANYBUT:
       case ANYBUT + ADD_NL:
@@ -7521,8 +7523,7 @@ vim_regsub_both(
 	    {
 		STRCPY(dest, eval_result);
 		dst += STRLEN(eval_result);
-		vim_free(eval_result);
-		eval_result = NULL;
+		VIM_CLEAR(eval_result);
 	    }
 	}
 	else
@@ -8150,7 +8151,7 @@ vim_regcomp(char_u *expr_arg, int re_flags)
      * First try the NFA engine, unless backtracking was requested.
      */
     if (regexp_engine != BACKTRACKING_ENGINE)
-        prog = nfa_regengine.regcomp(expr,
+	prog = nfa_regengine.regcomp(expr,
 		re_flags + (regexp_engine == AUTOMATIC_ENGINE ? RE_AUTO : 0));
     else
 	prog = bt_regengine.regcomp(expr, re_flags);
@@ -8170,7 +8171,7 @@ vim_regcomp(char_u *expr_arg, int re_flags)
 	    }
 	    else
 		EMSG2("(NFA) Could not open \"%s\" to write !!!",
-                        BT_REGEXP_DEBUG_LOG_NAME);
+			BT_REGEXP_DEBUG_LOG_NAME);
 	}
 #endif
 	/*
@@ -8331,8 +8332,8 @@ vim_regexec_nl(regmatch_T *rmp, char_u *line, colnr_T col)
 
 /*
  * Match a regexp against multiple lines.
- * "rmp->regprog" is a compiled regexp as returned by vim_regcomp().
- * Note: "rmp->regprog" may be freed and changed.
+ * "rmp->regprog" must be a compiled regexp as returned by vim_regcomp().
+ * Note: "rmp->regprog" may be freed and changed, even set to NULL.
  * Uses curbuf for line count and 'iskeyword'.
  *
  * Return zero if there is no match.  Return number of lines contained in the
@@ -8341,10 +8342,10 @@ vim_regexec_nl(regmatch_T *rmp, char_u *line, colnr_T col)
     long
 vim_regexec_multi(
     regmmatch_T *rmp,
-    win_T       *win,           /* window in which to search or NULL */
-    buf_T       *buf,           /* buffer in which to search */
-    linenr_T    lnum,           /* nr of line to start looking for match */
-    colnr_T     col,            /* column to start looking for match */
+    win_T       *win,		/* window in which to search or NULL */
+    buf_T       *buf,		/* buffer in which to search */
+    linenr_T	lnum,		/* nr of line to start looking for match */
+    colnr_T	col,		/* column to start looking for match */
     proftime_T	*tm,		/* timeout limit or NULL */
     int		*timed_out)	/* flag is set when timeout limit reached */
 {
@@ -8375,7 +8376,16 @@ vim_regexec_multi(
 #ifdef FEAT_EVAL
 	    report_re_switch(pat);
 #endif
+#ifdef FEAT_SYN_HL
+	    // checking for \z misuse was already done when compiling for NFA,
+	    // allow all here
+	    reg_do_extmatch = REX_ALL;
+#endif
 	    rmp->regprog = vim_regcomp(pat, re_flags);
+#ifdef FEAT_SYN_HL
+	    reg_do_extmatch = 0;
+#endif
+
 	    if (rmp->regprog != NULL)
 		result = rmp->regprog->engine->regexec_multi(
 				      rmp, win, buf, lnum, col, tm, timed_out);

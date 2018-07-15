@@ -54,8 +54,8 @@
  *			    website, etc)
  *
  * sectionID == SN_REGION: <regionname> ...
- * <regionname>	 2 bytes    Up to 8 region names: ca, au, etc.  Lower case.
- *			    First <regionname> is region 1.
+ * <regionname>	 2 bytes    Up to MAXREGIONS region names: ca, au, etc.  Lower
+ *			    case.  First <regionname> is region 1.
  *
  * sectionID == SN_CHARFLAGS: <charflagslen> <charflags>
  *				<folcharslen> <folchars>
@@ -832,7 +832,7 @@ read_region_section(FILE *fd, slang_T *lp, int len)
 {
     int		i;
 
-    if (len > 16)
+    if (len > MAXREGIONS * 2)
 	return SP_FORMERROR;
     for (i = 0; i < len; ++i)
 	lp->sl_regions[i] = getc(fd);			/* <regionname> */
@@ -1352,8 +1352,7 @@ read_compound(FILE *fd, slang_T *slang, int len)
 	{
 	    if (c == '?' || c == '+' || c == '*')
 	    {
-		vim_free(slang->sl_comprules);
-		slang->sl_comprules = NULL;
+		VIM_CLEAR(slang->sl_comprules);
 		crp = NULL;
 	    }
 	    else
@@ -1952,8 +1951,9 @@ typedef struct spellinfo_S
     char_u	*si_info;	/* info text chars or NULL  */
     int		si_region_count; /* number of regions supported (1 when there
 				    are no regions) */
-    char_u	si_region_name[17]; /* region names; used only if
-				     * si_region_count > 1) */
+    char_u	si_region_name[MAXREGIONS * 2 + 1];
+				/* region names; used only if
+				 * si_region_count > 1) */
 
     garray_T	si_rep;		/* list of fromto_T entries from REP lines */
     garray_T	si_repsal;	/* list of fromto_T entries from REPSAL lines */
@@ -2241,7 +2241,7 @@ spell_read_aff(spellinfo_T *spin, char_u *fname)
 	return NULL;
     }
 
-    vim_snprintf((char *)IObuff, IOSIZE, _("Reading affix file %s ..."), fname);
+    vim_snprintf((char *)IObuff, IOSIZE, _("Reading affix file %s..."), fname);
     spell_message(spin, IObuff);
 
     /* Only do REP lines when not done in another .aff file already. */
@@ -3569,7 +3569,7 @@ spell_read_dic(spellinfo_T *spin, char_u *fname, afffile_T *affile)
     hash_init(&ht);
 
     vim_snprintf((char *)IObuff, IOSIZE,
-				  _("Reading dictionary file %s ..."), fname);
+				  _("Reading dictionary file %s..."), fname);
     spell_message(spin, IObuff);
 
     /* start with a message for the first line */
@@ -3649,7 +3649,7 @@ spell_read_dic(spellinfo_T *spin, char_u *fname, afffile_T *affile)
 	{
 	    spin->si_msg_count = 0;
 	    vim_snprintf((char *)message, sizeof(message),
-		    _("line %6d, word %6d - %s"),
+		    _("line %6d, word %6ld - %s"),
 		       lnum, spin->si_foldwcount + spin->si_keepwcount, w);
 	    msg_start();
 	    msg_puts_long_attr(message, 0);
@@ -4149,7 +4149,7 @@ spell_read_wordfile(spellinfo_T *spin, char_u *fname)
 	return FAIL;
     }
 
-    vim_snprintf((char *)IObuff, IOSIZE, _("Reading word file %s ..."), fname);
+    vim_snprintf((char *)IObuff, IOSIZE, _("Reading word file %s..."), fname);
     spell_message(spin, IObuff);
 
     /*
@@ -4234,7 +4234,7 @@ spell_read_wordfile(spellinfo_T *spin, char_u *fname)
 		else
 		{
 		    line += 8;
-		    if (STRLEN(line) > 16)
+		    if (STRLEN(line) > MAXREGIONS * 2)
 			smsg((char_u *)_("Too many regions in %s line %d: %s"),
 						       fname, lnum, line);
 		    else
@@ -4277,7 +4277,7 @@ spell_read_wordfile(spellinfo_T *spin, char_u *fname)
 		    flags |= WF_REGION;
 
 		    l = *p - '0';
-		    if (l > spin->si_region_count)
+		    if (l == 0 || l > spin->si_region_count)
 		    {
 			smsg((char_u *)_("Invalid region nr in %s line %d: %s"),
 							  fname, lnum, p);
@@ -5865,7 +5865,7 @@ sug_write(spellinfo_T *spin, char_u *fname)
     }
 
     vim_snprintf((char *)IObuff, IOSIZE,
-				  _("Writing suggestion file %s ..."), fname);
+				  _("Writing suggestion file %s..."), fname);
     spell_message(spin, IObuff);
 
     /*
@@ -5954,7 +5954,7 @@ mkspell(
     char_u	*wfname;
     char_u	**innames;
     int		incount;
-    afffile_T	*(afile[8]);
+    afffile_T	*(afile[MAXREGIONS]);
     int		i;
     int		len;
     stat_T	st;
@@ -6025,8 +6025,8 @@ mkspell(
 	EMSG(_(e_invarg));	/* need at least output and input names */
     else if (vim_strchr(gettail(wfname), '_') != NULL)
 	EMSG(_("E751: Output file name must not have region name"));
-    else if (incount > 8)
-	EMSG(_("E754: Only up to 8 regions supported"));
+    else if (incount > MAXREGIONS)
+	EMSGN(_("E754: Only up to %ld regions supported"), MAXREGIONS);
     else
     {
 	/* Check for overwriting before doing things that may take a lot of
@@ -6150,7 +6150,7 @@ mkspell(
 	     * Write the info in the spell file.
 	     */
 	    vim_snprintf((char *)IObuff, IOSIZE,
-				      _("Writing spell file %s ..."), wfname);
+				      _("Writing spell file %s..."), wfname);
 	    spell_message(&spin, IObuff);
 
 	    error = write_vim_spell(&spin, wfname) == FAIL;

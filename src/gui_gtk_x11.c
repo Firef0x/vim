@@ -789,6 +789,37 @@ property_event(GtkWidget *widget,
 #endif /* defined(FEAT_CLIENTSERVER) */
 
 
+#if GTK_CHECK_VERSION(3,0,0)
+typedef gboolean timeout_cb_type;
+#else
+typedef gint timeout_cb_type;
+#endif
+
+/*
+ * Start a timer that will invoke the specified callback.
+ * Returns the ID of the timer.
+ */
+    static guint
+timeout_add(int time, timeout_cb_type (*callback)(gpointer), int *flagp)
+{
+#if GTK_CHECK_VERSION(3,0,0)
+    return g_timeout_add((guint)time, (GSourceFunc)callback, flagp);
+#else
+    return gtk_timeout_add((guint32)time, (GtkFunction)callback, flagp);
+#endif
+}
+
+    static void
+timeout_remove(guint timer)
+{
+#if GTK_CHECK_VERSION(3,0,0)
+    g_source_remove(timer);
+#else
+    gtk_timeout_remove(timer);
+#endif
+}
+
+
 /****************************************************************************
  * Focus handlers:
  */
@@ -862,18 +893,14 @@ gui_mch_set_blinking(long waittime, long on, long off)
  * Stop the cursor blinking.  Show the cursor if it wasn't shown.
  */
     void
-gui_mch_stop_blink(void)
+gui_mch_stop_blink(int may_call_gui_update_cursor)
 {
     if (blink_timer)
     {
-#if GTK_CHECK_VERSION(3,0,0)
-	g_source_remove(blink_timer);
-#else
-	gtk_timeout_remove(blink_timer);
-#endif
+	timeout_remove(blink_timer);
 	blink_timer = 0;
     }
-    if (blink_state == BLINK_OFF)
+    if (blink_state == BLINK_OFF && may_call_gui_update_cursor)
     {
 	gui_update_cursor(TRUE, FALSE);
 	gui_mch_flush();
@@ -881,36 +908,20 @@ gui_mch_stop_blink(void)
     blink_state = BLINK_NONE;
 }
 
-#if GTK_CHECK_VERSION(3,0,0)
-    static gboolean
-#else
-    static gint
-#endif
+    static timeout_cb_type
 blink_cb(gpointer data UNUSED)
 {
     if (blink_state == BLINK_ON)
     {
 	gui_undraw_cursor();
 	blink_state = BLINK_OFF;
-#if GTK_CHECK_VERSION(3,0,0)
-	blink_timer = g_timeout_add((guint)blink_offtime,
-				   (GSourceFunc) blink_cb, NULL);
-#else
-	blink_timer = gtk_timeout_add((guint32)blink_offtime,
-				   (GtkFunction) blink_cb, NULL);
-#endif
+	blink_timer = timeout_add(blink_offtime, blink_cb, NULL);
     }
     else
     {
 	gui_update_cursor(TRUE, FALSE);
 	blink_state = BLINK_ON;
-#if GTK_CHECK_VERSION(3,0,0)
-	blink_timer = g_timeout_add((guint)blink_ontime,
-				   (GSourceFunc) blink_cb, NULL);
-#else
-	blink_timer = gtk_timeout_add((guint32)blink_ontime,
-				   (GtkFunction) blink_cb, NULL);
-#endif
+	blink_timer = timeout_add(blink_ontime, blink_cb, NULL);
     }
     gui_mch_flush();
 
@@ -926,23 +937,13 @@ gui_mch_start_blink(void)
 {
     if (blink_timer)
     {
-#if GTK_CHECK_VERSION(3,0,0)
-	g_source_remove(blink_timer);
-#else
-	gtk_timeout_remove(blink_timer);
-#endif
+	timeout_remove(blink_timer);
 	blink_timer = 0;
     }
     /* Only switch blinking on if none of the times is zero */
     if (blink_waittime && blink_ontime && blink_offtime && gui.in_focus)
     {
-#if GTK_CHECK_VERSION(3,0,0)
-	blink_timer = g_timeout_add((guint)blink_waittime,
-				   (GSourceFunc) blink_cb, NULL);
-#else
-	blink_timer = gtk_timeout_add((guint32)blink_waittime,
-				   (GtkFunction) blink_cb, NULL);
-#endif
+	blink_timer = timeout_add(blink_waittime, blink_cb, NULL);
 	blink_state = BLINK_ON;
 	gui_update_cursor(TRUE, FALSE);
 	gui_mch_flush();
@@ -974,7 +975,7 @@ leave_notify_event(GtkWidget *widget UNUSED,
 		   gpointer data UNUSED)
 {
     if (blink_state != BLINK_NONE)
-	gui_mch_stop_blink();
+	gui_mch_stop_blink(TRUE);
 
     return FALSE;
 }
@@ -1005,7 +1006,7 @@ focus_out_event(GtkWidget *widget UNUSED,
     gui_focus_change(FALSE);
 
     if (blink_state != BLINK_NONE)
-	gui_mch_stop_blink();
+	gui_mch_stop_blink(TRUE);
 
     return TRUE;
 }
@@ -1144,7 +1145,7 @@ key_press_event(GtkWidget *widget UNUSED,
 
 #if GTK_CHECK_VERSION(3,0,0)
     is_key_pressed = TRUE;
-    gui_mch_stop_blink();
+    gui_mch_stop_blink(TRUE);
 #endif
 
     gui.event_time = event->time;
@@ -1365,15 +1366,21 @@ key_release_event(GtkWidget *widget UNUSED,
  * Selection handlers:
  */
 
+/* Remember when clip_lose_selection was called from here, we must not call
+ * gtk_selection_owner_set() then. */
+static int in_selection_clear_event = FALSE;
+
     static gint
 selection_clear_event(GtkWidget		*widget UNUSED,
 		      GdkEventSelection	*event,
 		      gpointer		user_data UNUSED)
 {
+    in_selection_clear_event = TRUE;
     if (event->selection == clip_plus.gtk_sel_atom)
 	clip_lose_selection(&clip_plus);
     else
 	clip_lose_selection(&clip_star);
+    in_selection_clear_event = FALSE;
 
     return TRUE;
 }
@@ -1733,7 +1740,6 @@ gui_mch_init_check(void)
     return OK;
 }
 
-
 /****************************************************************************
  * Mouse handling callbacks
  */
@@ -1745,11 +1751,7 @@ static int mouse_timed_out = TRUE;
 /*
  * Timer used to recognize multiple clicks of the mouse button
  */
-#if GTK_CHECK_VERSION(3,0,0)
-    static gboolean
-#else
-    static gint
-#endif
+    static timeout_cb_type
 mouse_click_timer_cb(gpointer data)
 {
     /* we don't use this information currently */
@@ -1759,13 +1761,9 @@ mouse_click_timer_cb(gpointer data)
     return FALSE;		/* don't happen again */
 }
 
-static guint motion_repeat_timer  = 0;
-static int   motion_repeat_offset = FALSE;
-#ifdef GTK_DEST_DEFAULT_ALL
-static gboolean  motion_repeat_timer_cb(gpointer);
-#else
-static gint  motion_repeat_timer_cb(gpointer);
-#endif
+static guint		motion_repeat_timer  = 0;
+static int		motion_repeat_offset = FALSE;
+static timeout_cb_type	motion_repeat_timer_cb(gpointer);
 
     static void
 process_motion_notify(int x, int y, GdkModifierType state)
@@ -1853,13 +1851,8 @@ process_motion_notify(int x, int y, GdkModifierType state)
 
 	/* shoot again */
 	if (!motion_repeat_timer)
-#if GTK_CHECK_VERSION(3,0,0)
-	    motion_repeat_timer = g_timeout_add((guint)delay,
-						motion_repeat_timer_cb, NULL);
-#else
-	    motion_repeat_timer = gtk_timeout_add((guint32)delay,
-						motion_repeat_timer_cb, NULL);
-#endif
+	    motion_repeat_timer = timeout_add(delay, motion_repeat_timer_cb,
+									 NULL);
     }
 }
 
@@ -1904,11 +1897,7 @@ gui_gtk_window_at_position(GtkWidget *widget,
 /*
  * Timer used to recognize multiple clicks of the mouse button.
  */
-#if GTK_CHECK_VERSION(3,0,0)
-    static gboolean
-#else
-    static gint
-#endif
+    static timeout_cb_type
 motion_repeat_timer_cb(gpointer data UNUSED)
 {
     int		    x;
@@ -2019,23 +2008,14 @@ button_press_event(GtkWidget *widget,
     /* Handle multiple clicks */
     if (!mouse_timed_out && mouse_click_timer)
     {
-#if GTK_CHECK_VERSION(3,0,0)
-	g_source_remove(mouse_click_timer);
-#else
-	gtk_timeout_remove(mouse_click_timer);
-#endif
+	timeout_remove(mouse_click_timer);
 	mouse_click_timer = 0;
 	repeated_click = TRUE;
     }
 
     mouse_timed_out = FALSE;
-#if GTK_CHECK_VERSION(3,0,0)
-    mouse_click_timer = g_timeout_add((guint)p_mouset,
-				  mouse_click_timer_cb, &mouse_timed_out);
-#else
-    mouse_click_timer = gtk_timeout_add((guint32)p_mouset,
-				  mouse_click_timer_cb, &mouse_timed_out);
-#endif
+    mouse_click_timer = timeout_add(p_mouset, mouse_click_timer_cb,
+							     &mouse_timed_out);
 
     switch (event->button)
     {
@@ -2129,11 +2109,7 @@ button_release_event(GtkWidget *widget UNUSED,
        area .*/
     if (motion_repeat_timer)
     {
-#if GTK_CHECK_VERSION(3,0,0)
-	g_source_remove(motion_repeat_timer);
-#else
-	gtk_timeout_remove(motion_repeat_timer);
-#endif
+	timeout_remove(motion_repeat_timer);
 	motion_repeat_timer = 0;
     }
 
@@ -2968,7 +2944,7 @@ mainwin_screen_changed_cb(GtkWidget  *widget,
     if (gui.norm_font != NULL)
     {
 	gui_mch_init_font(p_guifont, FALSE);
-	gui_set_shellsize(FALSE, FALSE, RESIZE_BOTH);
+	gui_set_shellsize(TRUE, FALSE, RESIZE_BOTH);
     }
 }
 
@@ -3605,8 +3581,29 @@ on_select_tab(
 	gpointer	data UNUSED)
 {
     if (!ignore_tabline_evt)
-    {
 	send_tabline_event(idx + 1);
+}
+
+/*
+ * Handle reordering the tabs (using D&D).
+ */
+    static void
+on_tab_reordered(
+	GtkNotebook	*notebook UNUSED,
+# if GTK_CHECK_VERSION(3,0,0)
+	gpointer	*page UNUSED,
+# else
+	GtkNotebookPage *page UNUSED,
+# endif
+	gint		idx,
+	gpointer	data UNUSED)
+{
+    if (!ignore_tabline_evt)
+    {
+	if ((tabpage_index(curtab) - 1) < idx)
+	    tabpage_move(idx + 1);
+	else
+	    tabpage_move(idx);
     }
 }
 
@@ -3696,6 +3693,9 @@ gui_mch_update_tabline(void)
 		    page,
 		    event_box,
 		    nr++);
+	    gtk_notebook_set_tab_reorderable(GTK_NOTEBOOK(gui.tabline),
+		    page,
+		    TRUE);
 	}
 
 	event_box = gtk_notebook_get_tab_label(GTK_NOTEBOOK(gui.tabline), page);
@@ -3852,8 +3852,7 @@ gui_mch_init(void)
 # endif
     }
 #endif
-    vim_free(gui_argv);
-    gui_argv = NULL;
+    VIM_CLEAR(gui_argv);
 
 #if GLIB_CHECK_VERSION(2,1,3)
     /* Set the human-readable application name */
@@ -4131,14 +4130,19 @@ gui_mch_init(void)
 # endif
 	gtk_container_add(GTK_CONTAINER(event_box), label);
 	gtk_notebook_set_tab_label(GTK_NOTEBOOK(gui.tabline), page, event_box);
+	gtk_notebook_set_tab_reorderable(GTK_NOTEBOOK(gui.tabline), page, TRUE);
     }
 
 # if GTK_CHECK_VERSION(3,0,0)
     g_signal_connect(G_OBJECT(gui.tabline), "switch-page",
 		     G_CALLBACK(on_select_tab), NULL);
+    g_signal_connect(G_OBJECT(gui.tabline), "page-reordered",
+		     G_CALLBACK(on_tab_reordered), NULL);
 # else
     gtk_signal_connect(GTK_OBJECT(gui.tabline), "switch_page",
 		       GTK_SIGNAL_FUNC(on_select_tab), NULL);
+    gtk_signal_connect(GTK_OBJECT(gui.tabline), "page-reordered",
+		       GTK_SIGNAL_FUNC(on_tab_reordered), NULL);
 # endif
 
     /* Create a popup menu for the tab line and connect it. */
@@ -4586,7 +4590,7 @@ mainwin_destroy_cb(GtkObject *object UNUSED, gpointer data UNUSED)
  * scrollbar init.), actually do the standard hints and stop the timer.
  * We'll not let the default hints be set while this timer's active.
  */
-    static gboolean
+    static timeout_cb_type
 check_startup_plug_hints(gpointer data UNUSED)
 {
     if (init_window_hints_state == 1)
@@ -4677,8 +4681,7 @@ gui_mch_open(void)
 		y += hh - pixel_height;
 	    gtk_window_move(GTK_WINDOW(gui.mainwin), x, y);
 	}
-	vim_free(gui.geom);
-	gui.geom = NULL;
+	VIM_CLEAR(gui.geom);
 
 	/* From now until everyone's stopped trying to set the window hints
 	 * to their correct minimum values, stop them being set as we need
@@ -4689,7 +4692,7 @@ gui_mch_open(void)
 	{
 	    update_window_manager_hints(pixel_width, pixel_height);
 	    init_window_hints_state = 1;
-	    g_timeout_add(1000, check_startup_plug_hints, NULL);
+	    timeout_add(1000, check_startup_plug_hints, NULL);
 	}
     }
 
@@ -4918,8 +4921,9 @@ gui_mch_unmaximize(void)
 }
 
 /*
- * Called when the font changed while the window is maximized.  Compute the
- * new Rows and Columns.  This is like resizing the window.
+ * Called when the font changed while the window is maximized or GO_KEEPWINSIZE
+ * is set.  Compute the new Rows and Columns.  This is like resizing the
+ * window.
  */
     void
 gui_mch_newfont(void)
@@ -4979,6 +4983,29 @@ gui_mch_set_shellsize(int width, int height,
     gui_mch_update();
 }
 
+    void
+gui_gtk_get_screen_size_of_win(GtkWidget *wid, int *width, int *height)
+{
+#if GTK_CHECK_VERSION(3,22,0)
+    GdkDisplay *dpy = gtk_widget_get_display(wid);
+    GdkWindow *win = gtk_widget_get_window(wid);
+    GdkMonitor *monitor = gdk_display_get_monitor_at_window(dpy, win);
+    GdkRectangle geometry;
+
+    gdk_monitor_get_geometry(monitor, &geometry);
+    *width = geometry.width;
+    *height = geometry.height;
+#else
+    GdkScreen* screen;
+
+    if (wid != NULL && gtk_widget_has_screen(wid))
+	screen = gtk_widget_get_screen(wid);
+    else
+	screen = gdk_screen_get_default();
+    *width = gdk_screen_get_width(screen);
+    *height = gdk_screen_get_height(screen);
+#endif
+}
 
 /*
  * The screen size is used to make sure the initial window doesn't get bigger
@@ -4988,30 +5015,11 @@ gui_mch_set_shellsize(int width, int height,
     void
 gui_mch_get_screen_dimensions(int *screen_w, int *screen_h)
 {
-#if GTK_CHECK_VERSION(3,22,2)
-    GdkRectangle rect;
-    GdkMonitor * const mon = gdk_display_get_monitor_at_window(
-	    gtk_widget_get_display(gui.mainwin),
-	    gtk_widget_get_window(gui.mainwin));
-    gdk_monitor_get_geometry(mon, &rect);
+    gui_gtk_get_screen_size_of_win(gui.mainwin, screen_w, screen_h);
 
-    *screen_w = rect.width;
     /* Subtract 'guiheadroom' from the height to allow some room for the
      * window manager (task list and window title bar). */
-    *screen_h = rect.height - p_ghr;
-#else
-    GdkScreen* screen;
-
-    if (gui.mainwin != NULL && gtk_widget_has_screen(gui.mainwin))
-	screen = gtk_widget_get_screen(gui.mainwin);
-    else
-	screen = gdk_screen_get_default();
-
-    *screen_w = gdk_screen_get_width(screen);
-    /* Subtract 'guiheadroom' from the height to allow some room for the
-     * window manager (task list and window title bar). */
-    *screen_h = gdk_screen_get_height(screen) - p_ghr;
-#endif
+    *screen_h -= p_ghr;
 
     /*
      * FIXME: dirty trick: Because the gui_get_base_height() doesn't include
@@ -5607,23 +5615,43 @@ gui_mch_free_font(GuiFont font)
     guicolor_T
 gui_mch_get_color(char_u *name)
 {
+    guicolor_T color = INVALCOLOR;
+
     if (!gui.in_use)		/* can't do this when GUI not running */
-	return INVALCOLOR;
+	return color;
+
+    if (name != NULL)
+	color = gui_get_color_cmn(name);
 
 #if GTK_CHECK_VERSION(3,0,0)
-    return name != NULL ? gui_get_color_cmn(name) : INVALCOLOR;
+    return color;
 #else
-    guicolor_T color;
-    GdkColor gcolor;
-    int ret;
-
-    color = (name != NULL) ? gui_get_color_cmn(name) : INVALCOLOR;
     if (color == INVALCOLOR)
 	return INVALCOLOR;
 
-    gcolor.red = (guint16)(((color & 0xff0000) >> 16) / 255.0 * 65535 + 0.5);
-    gcolor.green = (guint16)(((color & 0xff00) >> 8) / 255.0 * 65535 + 0.5);
-    gcolor.blue = (guint16)((color & 0xff) / 255.0 * 65535 + 0.5);
+    return gui_mch_get_rgb_color(
+	    (color & 0xff0000) >> 16,
+	    (color & 0xff00) >> 8,
+	    color & 0xff);
+#endif
+}
+
+/*
+ * Return the Pixel value (color) for the given RGB values.
+ * Return INVALCOLOR for error.
+ */
+    guicolor_T
+gui_mch_get_rgb_color(int r, int g, int b)
+{
+#if GTK_CHECK_VERSION(3,0,0)
+    return gui_get_rgb_color_cmn(r, g, b);
+#else
+    GdkColor gcolor;
+    int ret;
+
+    gcolor.red = (guint16)(r / 255.0 * 65535 + 0.5);
+    gcolor.green = (guint16)(g / 255.0 * 65535 + 0.5);
+    gcolor.blue = (guint16)(b / 255.0 * 65535 + 0.5);
 
     ret = gdk_colormap_alloc_color(gtk_widget_get_colormap(gui.drawarea),
 	    &gcolor, FALSE, TRUE);
@@ -5928,6 +5956,27 @@ draw_under(int flags, int row, int col, int cells)
 #endif
     }
 
+    /* Draw a strikethrough line */
+    if (flags & DRAW_STRIKE)
+    {
+#if GTK_CHECK_VERSION(3,0,0)
+	cairo_set_line_width(cr, 1.0);
+	cairo_set_line_cap(cr, CAIRO_LINE_CAP_BUTT);
+	cairo_set_source_rgba(cr,
+		gui.spcolor->red, gui.spcolor->green, gui.spcolor->blue,
+		gui.spcolor->alpha);
+	cairo_move_to(cr, FILL_X(col), y + 1 - gui.char_height/2 + 0.5);
+	cairo_line_to(cr, FILL_X(col + cells), y + 1 - gui.char_height/2 + 0.5);
+	cairo_stroke(cr);
+#else
+	gdk_gc_set_foreground(gui.text_gc, gui.spcolor);
+	gdk_draw_line(gui.drawarea->window, gui.text_gc,
+		      FILL_X(col), y + 1 - gui.char_height/2,
+		      FILL_X(col + cells), y + 1 - gui.char_height/2);
+	gdk_gc_set_foreground(gui.text_gc, gui.fgcolor);
+#endif
+    }
+
     /* Underline: draw a line at the bottom of the character cell. */
     if (flags & DRAW_UNDERL)
     {
@@ -5936,16 +5985,14 @@ draw_under(int flags, int row, int col, int cells)
 	if (p_linespace > 1)
 	    y -= p_linespace - 1;
 #if GTK_CHECK_VERSION(3,0,0)
-	{
-	    cairo_set_line_width(cr, 1.0);
-	    cairo_set_line_cap(cr, CAIRO_LINE_CAP_BUTT);
-	    cairo_set_source_rgba(cr,
-		    gui.fgcolor->red, gui.fgcolor->green, gui.fgcolor->blue,
-		    gui.fgcolor->alpha);
-	    cairo_move_to(cr, FILL_X(col), y + 0.5);
-	    cairo_line_to(cr, FILL_X(col + cells), y + 0.5);
-	    cairo_stroke(cr);
-	}
+	cairo_set_line_width(cr, 1.0);
+	cairo_set_line_cap(cr, CAIRO_LINE_CAP_BUTT);
+	cairo_set_source_rgba(cr,
+		gui.fgcolor->red, gui.fgcolor->green, gui.fgcolor->blue,
+		gui.fgcolor->alpha);
+	cairo_move_to(cr, FILL_X(col), y + 0.5);
+	cairo_line_to(cr, FILL_X(col + cells), y + 0.5);
+	cairo_stroke(cr);
 #else
 	gdk_draw_line(gui.drawarea->window, gui.text_gc,
 		      FILL_X(col), y,
@@ -6574,11 +6621,7 @@ gui_mch_update(void)
 	g_main_context_iteration(NULL, TRUE);
 }
 
-#if GTK_CHECK_VERSION(3,0,0)
-    static gboolean
-#else
-    static gint
-#endif
+    static timeout_cb_type
 input_timer_cb(gpointer data)
 {
     int *timed_out = (int *) data;
@@ -6588,6 +6631,19 @@ input_timer_cb(gpointer data)
 
     return FALSE;		/* don't happen again */
 }
+
+#ifdef FEAT_JOB_CHANNEL
+    static timeout_cb_type
+channel_poll_cb(gpointer data UNUSED)
+{
+    /* Using an event handler for a channel that may be disconnected does
+     * not work, it hangs.  Instead poll for messages. */
+    channel_handle_events(TRUE);
+    parse_queued_messages();
+
+    return TRUE;		/* repeat */
+}
+#endif
 
 /*
  * GUI input routine called by gui_wait_for_chars().  Waits for a character
@@ -6605,19 +6661,25 @@ gui_mch_wait_for_chars(long wtime)
     guint	timer;
     static int	timed_out;
     int		retval = FAIL;
+#ifdef FEAT_JOB_CHANNEL
+    guint	channel_timer = 0;
+#endif
 
     timed_out = FALSE;
 
     /* this timeout makes sure that we will return if no characters arrived in
      * time */
     if (wtime > 0)
-#if GTK_CHECK_VERSION(3,0,0)
-	timer = g_timeout_add((guint)wtime, input_timer_cb, &timed_out);
-#else
-	timer = gtk_timeout_add((guint32)wtime, input_timer_cb, &timed_out);
-#endif
+	timer = timeout_add(wtime, input_timer_cb, &timed_out);
     else
 	timer = 0;
+
+#ifdef FEAT_JOB_CHANNEL
+    /* If there is a channel with the keep_open flag we need to poll for input
+     * on them. */
+    if (channel_any_keep_open())
+	channel_timer = timeout_add(20, channel_poll_cb, NULL);
+#endif
 
     focus = gui.in_focus;
 
@@ -6629,7 +6691,7 @@ gui_mch_wait_for_chars(long wtime)
 	    if (gui.in_focus)
 		gui_mch_start_blink();
 	    else
-		gui_mch_stop_blink();
+		gui_mch_stop_blink(TRUE);
 	    focus = gui.in_focus;
 	}
 
@@ -6668,10 +6730,10 @@ gui_mch_wait_for_chars(long wtime)
 
 theend:
     if (timer != 0 && !timed_out)
-#if GTK_CHECK_VERSION(3,0,0)
-	g_source_remove(timer);
-#else
-	gtk_timeout_remove(timer);
+	timeout_remove(timer);
+#ifdef FEAT_JOB_CHANNEL
+    if (channel_timer != 0)
+	timeout_remove(channel_timer);
 #endif
 
     return retval;
@@ -7002,8 +7064,11 @@ clip_mch_request_selection(VimClipboard *cbd)
     void
 clip_mch_lose_selection(VimClipboard *cbd UNUSED)
 {
-    gtk_selection_owner_set(NULL, cbd->gtk_sel_atom, gui.event_time);
-    gui_mch_update();
+    if (!in_selection_clear_event)
+    {
+	gtk_selection_owner_set(NULL, cbd->gtk_sel_atom, gui.event_time);
+	gui_mch_update();
+    }
 }
 
 /*

@@ -23,6 +23,7 @@ static int	diff_busy = FALSE;	/* ex_diffgetput() is busy */
 #define DIFF_IWHITE	4	/* ignore change in white space */
 #define DIFF_HORIZONTAL	8	/* horizontal splits */
 #define DIFF_VERTICAL	16	/* vertical splits */
+#define DIFF_HIDDEN_OFF	32	/* diffoff when hidden */
 static int	diff_flags = DIFF_FILLER;
 
 #define LBUFLEN 50		/* length of line in diff file */
@@ -871,13 +872,9 @@ diff_file(
 		    (diff_flags & DIFF_ICASE) ? "-i " : "",
 		    tmp_orig, tmp_new);
 	    append_redir(cmd, (int)len, p_srr, tmp_diff);
-#ifdef FEAT_AUTOCMD
 	    block_autocmds();	/* Avoid ShellCmdPost stuff */
-#endif
 	    (void)call_shell(cmd, SHELL_FILTER|SHELL_SILENT|SHELL_DOOUT);
-#ifdef FEAT_AUTOCMD
 	    unblock_autocmds();
-#endif
 	    vim_free(cmd);
 	}
     }
@@ -912,7 +909,8 @@ ex_diffpatch(exarg_T *eap)
     if (cmdmod.browse)
     {
 	browseFile = do_browse(0, (char_u *)_("Patch file"),
-			 eap->arg, NULL, NULL, BROWSE_FILTER_ALL_FILES, NULL);
+			 eap->arg, NULL, NULL,
+			 (char_u *)_(BROWSE_FILTER_ALL_FILES), NULL);
 	if (browseFile == NULL)
 	    return;		/* operation cancelled */
 	eap->arg = browseFile;
@@ -983,13 +981,9 @@ ex_diffpatch(exarg_T *eap)
 	 * cooked mode to allow the user to respond to prompts. */
 	vim_snprintf((char *)buf, buflen, "patch -o %s %s < %s",
 						  tmp_new, tmp_orig, esc_name);
-#ifdef FEAT_AUTOCMD
 	block_autocmds();	/* Avoid ShellCmdPost stuff */
-#endif
 	(void)call_shell(buf, SHELL_FILTER | SHELL_COOKED);
-#ifdef FEAT_AUTOCMD
 	unblock_autocmds();
-#endif
     }
 
 #ifdef UNIX
@@ -1051,11 +1045,9 @@ ex_diffpatch(exarg_T *eap)
 		    eap->arg = newname;
 		    ex_file(eap);
 
-#ifdef FEAT_AUTOCMD
 		    /* Do filetype detection with the new name. */
 		    if (au_has_group((char_u *)"filetypedetect"))
 			do_cmdline_cmd((char_u *)":doau filetypedetect BufRead");
-#endif
 		}
 	    }
 	}
@@ -1137,6 +1129,20 @@ ex_diffthis(exarg_T *eap UNUSED)
     diff_win_options(curwin, TRUE);
 }
 
+    static void
+set_diff_option(win_T *wp, int value)
+{
+    win_T *old_curwin = curwin;
+
+    curwin = wp;
+    curbuf = curwin->w_buffer;
+    ++curbuf_lock;
+    set_option_value((char_u *)"diff", (long)value, NULL, OPT_LOCAL);
+    --curbuf_lock;
+    curwin = old_curwin;
+    curbuf = curwin->w_buffer;
+}
+
 /*
  * Set options in window "wp" for diff mode.
  */
@@ -1155,16 +1161,12 @@ diff_win_options(
 # endif
 
     /* Use 'scrollbind' and 'cursorbind' when available */
-#ifdef FEAT_SCROLLBIND
     if (!wp->w_p_diff)
 	wp->w_p_scb_save = wp->w_p_scb;
     wp->w_p_scb = TRUE;
-#endif
-#ifdef FEAT_CURSORBIND
     if (!wp->w_p_diff)
 	wp->w_p_crb_save = wp->w_p_crb;
     wp->w_p_crb = TRUE;
-#endif
     if (!wp->w_p_diff)
 	wp->w_p_wrap_save = wp->w_p_wrap;
     wp->w_p_wrap = FALSE;
@@ -1194,14 +1196,12 @@ diff_win_options(
     /* make sure topline is not halfway a fold */
     changed_window_setting_win(wp);
 # endif
-#ifdef FEAT_SCROLLBIND
     if (vim_strchr(p_sbo, 'h') == NULL)
 	do_cmdline_cmd((char_u *)"set sbo+=hor");
-#endif
-    /* Saved the current values, to be restored in ex_diffoff(). */
+    /* Save the current values, to be restored in ex_diffoff(). */
     wp->w_p_diff_saved = TRUE;
 
-    wp->w_p_diff = TRUE;
+    set_diff_option(wp, TRUE);
 
     if (addbuf)
 	diff_buf_add(wp->w_buffer);
@@ -1216,9 +1216,7 @@ diff_win_options(
 ex_diffoff(exarg_T *eap)
 {
     win_T	*wp;
-#ifdef FEAT_SCROLLBIND
     int		diffwin = FALSE;
-#endif
 
     FOR_ALL_WINDOWS(wp)
     {
@@ -1227,19 +1225,15 @@ ex_diffoff(exarg_T *eap)
 	    /* Set 'diff' off. If option values were saved in
 	     * diff_win_options(), restore the ones whose settings seem to have
 	     * been left over from diff mode.  */
-	    wp->w_p_diff = FALSE;
+	    set_diff_option(wp, FALSE);
 
 	    if (wp->w_p_diff_saved)
 	    {
 
-#ifdef FEAT_SCROLLBIND
 		if (wp->w_p_scb)
 		    wp->w_p_scb = wp->w_p_scb_save;
-#endif
-#ifdef FEAT_CURSORBIND
 		if (wp->w_p_crb)
 		    wp->w_p_crb = wp->w_p_crb_save;
-#endif
 		if (!wp->w_p_wrap)
 		    wp->w_p_wrap = wp->w_p_wrap_save;
 #ifdef FEAT_FOLDING
@@ -1271,20 +1265,16 @@ ex_diffoff(exarg_T *eap)
 	    /* Note: 'sbo' is not restored, it's a global option. */
 	    diff_buf_adjust(wp);
 	}
-#ifdef FEAT_SCROLLBIND
 	diffwin |= wp->w_p_diff;
-#endif
     }
 
     /* Also remove hidden buffers from the list. */
     if (eap->forceit)
 	diff_buf_clear();
 
-#ifdef FEAT_SCROLLBIND
     /* Remove "hor" from from 'scrollopt' if there are no diff windows left. */
     if (!diffwin && vim_strchr(p_sbo, 'h') != NULL)
 	do_cmdline_cmd((char_u *)"set sbo-=hor");
-#endif
 }
 
 /*
@@ -1647,6 +1637,40 @@ diff_equal_entry(diff_T *dp, int idx1, int idx2)
 }
 
 /*
+ * Compare the characters at "p1" and "p2".  If they are equal (possibly
+ * ignoring case) return TRUE and set "len" to the number of bytes.
+ */
+    static int
+diff_equal_char(char_u *p1, char_u *p2, int *len)
+{
+#ifdef FEAT_MBYTE
+    int l  = (*mb_ptr2len)(p1);
+
+    if (l != (*mb_ptr2len)(p2))
+	return FALSE;
+    if (l > 1)
+    {
+	if (STRNCMP(p1, p2, l) != 0
+		&& (!enc_utf8
+		    || !(diff_flags & DIFF_ICASE)
+		    || utf_fold(utf_ptr2char(p1))
+						!= utf_fold(utf_ptr2char(p2))))
+	    return FALSE;
+	*len = l;
+    }
+    else
+#endif
+    {
+	if ((*p1 != *p2)
+		&& (!(diff_flags & DIFF_ICASE)
+		    || TOLOWER_LOC(*p1) != TOLOWER_LOC(*p2)))
+	    return FALSE;
+	*len = 1;
+    }
+    return TRUE;
+}
+
+/*
  * Compare strings "s1" and "s2" according to 'diffopt'.
  * Return non-zero when they are different.
  */
@@ -1654,9 +1678,7 @@ diff_equal_entry(diff_T *dp, int idx1, int idx2)
 diff_cmp(char_u *s1, char_u *s2)
 {
     char_u	*p1, *p2;
-#ifdef FEAT_MBYTE
     int		l;
-#endif
 
     if ((diff_flags & (DIFF_ICASE | DIFF_IWHITE)) == 0)
 	return STRCMP(s1, s2);
@@ -1675,30 +1697,10 @@ diff_cmp(char_u *s1, char_u *s2)
 	}
 	else
 	{
-#ifdef FEAT_MBYTE
-	    l  = (*mb_ptr2len)(p1);
-	    if (l != (*mb_ptr2len)(p2))
+	    if (!diff_equal_char(p1, p2, &l))
 		break;
-	    if (l > 1)
-	    {
-		if (STRNCMP(p1, p2, l) != 0
-			&& (!enc_utf8
-			    || !(diff_flags & DIFF_ICASE)
-			    || utf_fold(utf_ptr2char(p1))
-					       != utf_fold(utf_ptr2char(p2))))
-		    break;
-		p1 += l;
-		p2 += l;
-	    }
-	    else
-#endif
-	    {
-		if (*p1 != *p2 && (!(diff_flags & DIFF_ICASE)
-				     || TOLOWER_LOC(*p1) != TOLOWER_LOC(*p2)))
-		    break;
-		++p1;
-		++p2;
-	    }
+	    p1 += l;
+	    p2 += l;
 	}
     }
 
@@ -1898,6 +1900,11 @@ diffopt_changed(void)
 	    p += 11;
 	    diff_foldcolumn_new = getdigits(&p);
 	}
+	else if (STRNCMP(p, "hiddenoff", 9) == 0)
+	{
+	    p += 9;
+	    diff_flags_new |= DIFF_HIDDEN_OFF;
+	}
 	if (*p != ',' && *p != NUL)
 	    return FAIL;
 	if (*p == ',')
@@ -1936,6 +1943,15 @@ diffopt_horizontal(void)
 }
 
 /*
+ * Return TRUE if 'diffopt' contains "hiddenoff".
+ */
+    int
+diffopt_hiddenoff(void)
+{
+    return (diff_flags & DIFF_HIDDEN_OFF) != 0;
+}
+
+/*
  * Find the difference within a changed line.
  * Returns TRUE if the line was added, no other buffer has it.
  */
@@ -1955,6 +1971,8 @@ diff_find_change(
     int		idx;
     int		off;
     int		added = TRUE;
+    char_u	*p1, *p2;
+    int		l;
 
     /* Make a copy of the line, the next ml_get() will invalidate it. */
     line_org = vim_strsave(ml_get_buf(wp->w_buffer, lnum, FALSE));
@@ -2003,10 +2021,11 @@ diff_find_change(
 		}
 		else
 		{
-		    if (line_org[si_org] != line_new[si_new])
+		    if (!diff_equal_char(line_org + si_org, line_new + si_new,
+									   &l))
 			break;
-		    ++si_org;
-		    ++si_new;
+		    si_org += l;
+		    si_new += l;
 		}
 	    }
 #ifdef FEAT_MBYTE
@@ -2042,10 +2061,16 @@ diff_find_change(
 		    }
 		    else
 		    {
-			if (line_org[ei_org] != line_new[ei_new])
+			p1 = line_org + ei_org;
+			p2 = line_new + ei_new;
+#ifdef FEAT_MBYTE
+			p1 -= (*mb_head_off)(line_org, p1);
+			p2 -= (*mb_head_off)(line_new, p2);
+#endif
+			if (!diff_equal_char(p1, p2, &l))
 			    break;
-			--ei_org;
-			--ei_new;
+			ei_org -= l;
+			ei_new -= l;
 		    }
 		}
 		if (*endp < ei_org)
@@ -2116,6 +2141,13 @@ nv_diffgetput(int put, long count)
     exarg_T	ea;
     char_u	buf[30];
 
+#ifdef FEAT_JOB_CHANNEL
+    if (bt_prompt(curbuf))
+    {
+	vim_beep(BO_OPER);
+	return;
+    }
+#endif
     if (count == 0)
 	ea.arg = (char_u *)"";
     else

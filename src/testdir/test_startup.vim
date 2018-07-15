@@ -226,6 +226,20 @@ func Test_read_stdin()
   call delete('Xtestout')
 endfunc
 
+func Test_set_shell()
+  let after = [
+	\ 'call writefile([&shell], "Xtestout")',
+	\ 'quit!',
+	\ ]
+  let $SHELL = '/bin/with space/sh'
+  if RunVimPiped([], after, '', '')
+    let lines = readfile('Xtestout')
+    " MS-Windows adds a space after the word
+    call assert_equal('/bin/with\ space/sh', lines[0])
+  endif
+  call delete('Xtestout')
+endfunc
+
 func Test_progpath()
   " Tests normally run with "./vim" or "../vim", these must have been expanded
   " to a full path.
@@ -262,4 +276,28 @@ func Test_default_term()
   let out = system(GetVimCommand() . ' -c''set term'' -c cq')
   call assert_match("defaulting to 'ansi'", out)
   let $TERM = save_term
+endfunc
+
+func Test_zzz_startinsert()
+  " Test :startinsert
+  call writefile(['123456'], 'Xtestout')
+  let after = [
+	\ ':startinsert',
+  \ 'call feedkeys("foobar\<c-o>:wq\<cr>","t")'
+	\ ]
+  if RunVim([], after, 'Xtestout')
+    let lines = readfile('Xtestout')
+    call assert_equal(['foobar123456'], lines)
+  endif
+  " Test :startinsert!
+  call writefile(['123456'], 'Xtestout')
+  let after = [
+	\ ':startinsert!',
+  \ 'call feedkeys("foobar\<c-o>:wq\<cr>","t")'
+	\ ]
+  if RunVim([], after, 'Xtestout')
+    let lines = readfile('Xtestout')
+    call assert_equal(['123456foobar'], lines)
+  endif
+  call delete('Xtestout')
 endfunc

@@ -14,6 +14,10 @@
 #include "vim.h"
 #include "version.h"
 
+#if defined(FEAT_CMDL_COMPL) && defined(WIN3264)
+# include <lm.h>
+#endif
+
 static char_u *vim_version_dir(char_u *vimdir);
 static char_u *remove_tail(char_u *p, char_u *pend, char_u *name);
 #if defined(FEAT_CMDL_COMPL)
@@ -32,7 +36,12 @@ static garray_T	ga_users;
     int
 get_indent(void)
 {
+#ifdef FEAT_VARTABS
+    return get_indent_str_vtab(ml_get_curline(), (int)curbuf->b_p_ts,
+						 curbuf->b_p_vts_array, FALSE);
+#else
     return get_indent_str(ml_get_curline(), (int)curbuf->b_p_ts, FALSE);
+#endif
 }
 
 /*
@@ -41,7 +50,12 @@ get_indent(void)
     int
 get_indent_lnum(linenr_T lnum)
 {
+#ifdef FEAT_VARTABS
+    return get_indent_str_vtab(ml_get(lnum), (int)curbuf->b_p_ts,
+						 curbuf->b_p_vts_array, FALSE);
+#else
     return get_indent_str(ml_get(lnum), (int)curbuf->b_p_ts, FALSE);
+#endif
 }
 
 #if defined(FEAT_FOLDING) || defined(PROTO)
@@ -52,7 +66,12 @@ get_indent_lnum(linenr_T lnum)
     int
 get_indent_buf(buf_T *buf, linenr_T lnum)
 {
+#ifdef FEAT_VARTABS
+    return get_indent_str_vtab(ml_get_buf(buf, lnum, FALSE),
+			       (int)curbuf->b_p_ts, buf->b_p_vts_array, FALSE);
+#else
     return get_indent_str(ml_get_buf(buf, lnum, FALSE), (int)buf->b_p_ts, FALSE);
+#endif
 }
 #endif
 
@@ -87,6 +106,37 @@ get_indent_str(
     return count;
 }
 
+#ifdef FEAT_VARTABS
+/*
+ * Count the size (in window cells) of the indent in line "ptr", using
+ * variable tabstops.
+ * if "list" is TRUE, count only screen size for tabs.
+ */
+    int
+get_indent_str_vtab(char_u *ptr, int ts, int *vts, int list)
+{
+    int		count = 0;
+
+    for ( ; *ptr; ++ptr)
+    {
+	if (*ptr == TAB)    /* count a tab for what it is worth */
+	{
+	    if (!list || lcs_tab1)
+		count += tabstop_padding(count, ts, vts);
+	    else
+		/* In list mode, when tab is not set, count screen char width
+		 * for Tab, displays: ^I */
+		count += ptr2cells(ptr);
+	}
+	else if (*ptr == ' ')
+	    ++count;		/* count a space for one */
+	else
+	    break;
+    }
+    return count;
+}
+#endif
+
 /*
  * Set the indent of the current line.
  * Leaves the cursor on the first non-blank in the line.
@@ -111,6 +161,9 @@ set_indent(
     int		line_len;
     int		doit = FALSE;
     int		ind_done = 0;	    /* measured in spaces */
+#ifdef FEAT_VARTABS
+    int		ind_col = 0;
+#endif
     int		tab_pad;
     int		retval = FALSE;
     int		orig_char_len = -1; /* number of initial whitespace chars when
@@ -143,8 +196,13 @@ set_indent(
 	    {
 		if (*p == TAB)
 		{
+#ifdef FEAT_VARTABS
+		    tab_pad = tabstop_padding(ind_done, curbuf->b_p_ts,
+							curbuf->b_p_vts_array);
+#else
 		    tab_pad = (int)curbuf->b_p_ts
 					   - (ind_done % (int)curbuf->b_p_ts);
+#endif
 		    /* stop if this tab will overshoot the target */
 		    if (todo < tab_pad)
 			break;
@@ -161,23 +219,51 @@ set_indent(
 		++p;
 	    }
 
+#ifdef FEAT_VARTABS
+	    /* These diverge from this point. */
+	    ind_col = ind_done;
+#endif
 	    /* Set initial number of whitespace chars to copy if we are
 	     * preserving indent but expandtab is set */
 	    if (curbuf->b_p_et)
 		orig_char_len = ind_len;
 
 	    /* Fill to next tabstop with a tab, if possible */
+#ifdef FEAT_VARTABS
+	    tab_pad = tabstop_padding(ind_done, curbuf->b_p_ts,
+						curbuf->b_p_vts_array);
+#else
 	    tab_pad = (int)curbuf->b_p_ts - (ind_done % (int)curbuf->b_p_ts);
+#endif
 	    if (todo >= tab_pad && orig_char_len == -1)
 	    {
 		doit = TRUE;
 		todo -= tab_pad;
 		++ind_len;
 		/* ind_done += tab_pad; */
+#ifdef FEAT_VARTABS
+		ind_col += tab_pad;
+#endif
 	    }
 	}
 
 	/* count tabs required for indent */
+#ifdef FEAT_VARTABS
+	for (;;)
+	{
+	    tab_pad = tabstop_padding(ind_col, curbuf->b_p_ts,
+							curbuf->b_p_vts_array);
+	    if (todo < tab_pad)
+		break;
+	    if (*p != TAB)
+		doit = TRUE;
+	    else
+		++p;
+	    todo -= tab_pad;
+	    ++ind_len;
+	    ind_col += tab_pad;
+	}
+#else
 	while (todo >= (int)curbuf->b_p_ts)
 	{
 	    if (*p != TAB)
@@ -188,6 +274,7 @@ set_indent(
 	    ++ind_len;
 	    /* ind_done += (int)curbuf->b_p_ts; */
 	}
+#endif
     }
     /* count spaces required for indent */
     while (todo > 0)
@@ -262,8 +349,13 @@ set_indent(
 	    {
 		if (*p == TAB)
 		{
+#ifdef FEAT_VARTABS
+		    tab_pad = tabstop_padding(ind_done, curbuf->b_p_ts,
+							curbuf->b_p_vts_array);
+#else
 		    tab_pad = (int)curbuf->b_p_ts
 					   - (ind_done % (int)curbuf->b_p_ts);
+#endif
 		    /* stop if this tab will overshoot the target */
 		    if (todo < tab_pad)
 			break;
@@ -279,21 +371,42 @@ set_indent(
 	    }
 
 	    /* Fill to next tabstop with a tab, if possible */
+#ifdef FEAT_VARTABS
+	    tab_pad = tabstop_padding(ind_done, curbuf->b_p_ts,
+						curbuf->b_p_vts_array);
+#else
 	    tab_pad = (int)curbuf->b_p_ts - (ind_done % (int)curbuf->b_p_ts);
+#endif
 	    if (todo >= tab_pad)
 	    {
 		*s++ = TAB;
 		todo -= tab_pad;
+#ifdef FEAT_VARTABS
+		ind_done += tab_pad;
+#endif
 	    }
 
 	    p = skipwhite(p);
 	}
 
+#ifdef FEAT_VARTABS
+	for (;;)
+	{
+	    tab_pad = tabstop_padding(ind_done, curbuf->b_p_ts,
+							curbuf->b_p_vts_array);
+	    if (todo < tab_pad)
+		break;
+	    *s++ = TAB;
+	    todo -= tab_pad;
+	    ind_done += tab_pad;
+	}
+#else
 	while (todo >= (int)curbuf->b_p_ts)
 	{
 	    *s++ = TAB;
 	    todo -= (int)curbuf->b_p_ts;
 	}
+#endif
     }
     while (todo > 0)
     {
@@ -346,6 +459,9 @@ copy_indent(int size, char_u *src)
     int		tab_pad;
     int		ind_done;
     int		round;
+#ifdef FEAT_VARTABS
+    int		ind_col;
+#endif
 
     /* Round 1: compute the number of characters needed for the indent
      * Round 2: copy the characters. */
@@ -354,6 +470,9 @@ copy_indent(int size, char_u *src)
 	todo = size;
 	ind_len = 0;
 	ind_done = 0;
+#ifdef FEAT_VARTABS
+	ind_col = 0;
+#endif
 	s = src;
 
 	/* Count/copy the usable portion of the source line */
@@ -361,18 +480,29 @@ copy_indent(int size, char_u *src)
 	{
 	    if (*s == TAB)
 	    {
+#ifdef FEAT_VARTABS
+		tab_pad = tabstop_padding(ind_done, curbuf->b_p_ts,
+							curbuf->b_p_vts_array);
+#else
 		tab_pad = (int)curbuf->b_p_ts
 					   - (ind_done % (int)curbuf->b_p_ts);
+#endif
 		/* Stop if this tab will overshoot the target */
 		if (todo < tab_pad)
 		    break;
 		todo -= tab_pad;
 		ind_done += tab_pad;
+#ifdef FEAT_VARTABS
+		ind_col += tab_pad;
+#endif
 	    }
 	    else
 	    {
 		--todo;
 		++ind_done;
+#ifdef FEAT_VARTABS
+		++ind_col;
+#endif
 	    }
 	    ++ind_len;
 	    if (p != NULL)
@@ -381,22 +511,48 @@ copy_indent(int size, char_u *src)
 	}
 
 	/* Fill to next tabstop with a tab, if possible */
+#ifdef FEAT_VARTABS
+	tab_pad = tabstop_padding(ind_done, curbuf->b_p_ts,
+							curbuf->b_p_vts_array);
+#else
 	tab_pad = (int)curbuf->b_p_ts - (ind_done % (int)curbuf->b_p_ts);
+#endif
 	if (todo >= tab_pad && !curbuf->b_p_et)
 	{
 	    todo -= tab_pad;
 	    ++ind_len;
+#ifdef FEAT_VARTABS
+	    ind_col += tab_pad;
+#endif
 	    if (p != NULL)
 		*p++ = TAB;
 	}
 
 	/* Add tabs required for indent */
-	while (todo >= (int)curbuf->b_p_ts && !curbuf->b_p_et)
+	if (!curbuf->b_p_et)
 	{
-	    todo -= (int)curbuf->b_p_ts;
-	    ++ind_len;
-	    if (p != NULL)
-		*p++ = TAB;
+#ifdef FEAT_VARTABS
+	    for (;;)
+	    {
+		tab_pad = tabstop_padding(ind_col, curbuf->b_p_ts,
+							curbuf->b_p_vts_array);
+		if (todo < tab_pad)
+		    break;
+		todo -= tab_pad;
+		++ind_len;
+		ind_col += tab_pad;
+		if (p != NULL)
+		    *p++ = TAB;
+	    }
+#else
+	    while (todo >= (int)curbuf->b_p_ts)
+	    {
+		todo -= (int)curbuf->b_p_ts;
+		++ind_len;
+		if (p != NULL)
+		    *p++ = TAB;
+	    }
+#endif
 	}
 
 	/* Count/add spaces required for indent */
@@ -493,22 +649,36 @@ get_breakindent_win(
     static long	    prev_ts     = 0L; /* cached tabstop value */
     static char_u   *prev_line = NULL; /* cached pointer to line */
     static varnumber_T prev_tick = 0;   /* changedtick of cached value */
+#ifdef FEAT_VARTABS
+    static int      *prev_vts = NULL;    /* cached vartabs values */
+#endif
     int		    bri = 0;
     /* window width minus window margin space, i.e. what rests for text */
-    const int	    eff_wwidth = W_WIDTH(wp)
+    const int	    eff_wwidth = wp->w_width
 			    - ((wp->w_p_nu || wp->w_p_rnu)
 				&& (vim_strchr(p_cpo, CPO_NUMCOL) == NULL)
 						? number_width(wp) + 1 : 0);
 
     /* used cached indent, unless pointer or 'tabstop' changed */
     if (prev_line != line || prev_ts != wp->w_buffer->b_p_ts
-				  || prev_tick != CHANGEDTICK(wp->w_buffer))
+	    || prev_tick != CHANGEDTICK(wp->w_buffer)
+#ifdef FEAT_VARTABS
+	    || prev_vts != wp->w_buffer->b_p_vts_array
+#endif
+	)
     {
 	prev_line = line;
 	prev_ts = wp->w_buffer->b_p_ts;
 	prev_tick = CHANGEDTICK(wp->w_buffer);
+#ifdef FEAT_VARTABS
+	prev_vts = wp->w_buffer->b_p_vts_array;
+	prev_indent = get_indent_str_vtab(line,
+				     (int)wp->w_buffer->b_p_ts,
+				    wp->w_buffer->b_p_vts_array, wp->w_p_list);
+#else
 	prev_indent = get_indent_str(line,
 				     (int)wp->w_buffer->b_p_ts, wp->w_p_list);
+#endif
     }
     bri = prev_indent + wp->w_p_brishift;
 
@@ -588,7 +758,7 @@ cin_is_cinword(char_u *line)
  * "second_line_indent": indent for after ^^D in Insert mode or if flag
  *			  OPENLINE_COM_LIST
  *
- * Return TRUE for success, FALSE for failure
+ * Return OK for success, FAIL for failure
  */
     int
 open_line(
@@ -606,7 +776,7 @@ open_line(
     int		newindent = 0;		/* auto-indent of the new line */
     int		n;
     int		trunc_line = FALSE;	/* truncate current line afterwards */
-    int		retval = FALSE;		/* return value, default is FAIL */
+    int		retval = FAIL;		/* return value */
 #ifdef FEAT_COMMENTS
     int		extra_len = 0;		/* length of p_extra string */
     int		lead_len;		/* length of comment leader */
@@ -626,6 +796,9 @@ open_line(
     int		do_si = (!p_paste && curbuf->b_p_si
 # ifdef FEAT_CINDENT
 					&& !curbuf->b_p_cin
+# endif
+# ifdef FEAT_EVAL
+					&& *curbuf->b_p_inde == NUL
 # endif
 			);
     int		no_si = FALSE;		/* reset did_si afterwards */
@@ -734,7 +907,12 @@ open_line(
 	/*
 	 * count white space on current line
 	 */
+#ifdef FEAT_VARTABS
+	newindent = get_indent_str_vtab(saved_line, curbuf->b_p_ts,
+						 curbuf->b_p_vts_array, FALSE);
+#else
 	newindent = get_indent_str(saved_line, (int)curbuf->b_p_ts, FALSE);
+#endif
 	if (newindent == 0 && !(flags & OPENLINE_COM_LIST))
 	    newindent = second_line_indent; /* for ^^D command in insert mode */
 
@@ -1257,7 +1435,13 @@ open_line(
 					|| do_si
 #endif
 							   )
-			newindent = get_indent_str(leader, (int)curbuf->b_p_ts, FALSE);
+#ifdef FEAT_VARTABS
+			newindent = get_indent_str_vtab(leader, curbuf->b_p_ts,
+						 curbuf->b_p_vts_array, FALSE);
+#else
+			newindent = get_indent_str(leader,
+						   (int)curbuf->b_p_ts, FALSE);
+#endif
 
 		    /* Add the indent offset */
 		    if (newindent + off < 0)
@@ -1586,8 +1770,7 @@ open_line(
 	    && curbuf->b_p_ai)
     {
 	fixthisline(get_lisp_indent);
-	p = ml_get_curline();
-	ai_col = (colnr_T)(skipwhite(p) - p);
+	ai_col = (colnr_T)getwhitecols_curline();
     }
 #endif
 #ifdef FEAT_CINDENT
@@ -1605,8 +1788,7 @@ open_line(
 		: KEY_OPEN_BACK, ' ', linewhite(curwin->w_cursor.lnum)))
     {
 	do_c_expr_indent();
-	p = ml_get_curline();
-	ai_col = (colnr_T)(skipwhite(p) - p);
+	ai_col = (colnr_T)getwhitecols_curline();
     }
 #endif
 #if defined(FEAT_VREPLACE) && (defined(FEAT_LISP) || defined(FEAT_CINDENT))
@@ -1641,7 +1823,7 @@ open_line(
     }
 #endif
 
-    retval = TRUE;		/* success! */
+    retval = OK;		/* success! */
 theend:
     curbuf->b_p_pi = saved_pi;
     vim_free(saved_line);
@@ -1983,10 +2165,8 @@ plines_win_nofill(
     if (!wp->w_p_wrap)
 	return 1;
 
-#ifdef FEAT_WINDOWS
     if (wp->w_width == 0)
 	return 1;
-#endif
 
 #ifdef FEAT_FOLDING
     /* A folded lines is handled just like an empty line. */
@@ -2027,7 +2207,7 @@ plines_win_nofold(win_T *wp, linenr_T lnum)
     /*
      * Add column offset for 'number', 'relativenumber' and 'foldcolumn'.
      */
-    width = W_WIDTH(wp) - win_col_off(wp);
+    width = wp->w_width - win_col_off(wp);
     if (width <= 0)
 	return 32000;
     if (col <= width)
@@ -2059,10 +2239,8 @@ plines_win_col(win_T *wp, linenr_T lnum, long column)
     if (!wp->w_p_wrap)
 	return lines + 1;
 
-#ifdef FEAT_WINDOWS
     if (wp->w_width == 0)
 	return lines + 1;
-#endif
 
     line = s = ml_get_buf(wp->w_buffer, lnum, FALSE);
 
@@ -2086,7 +2264,7 @@ plines_win_col(win_T *wp, linenr_T lnum, long column)
     /*
      * Add column offset for 'number', 'relativenumber', 'foldcolumn', etc.
      */
-    width = W_WIDTH(wp) - win_col_off(wp);
+    width = wp->w_width - win_col_off(wp);
     if (width <= 0)
 	return 9999;
 
@@ -2316,7 +2494,8 @@ ins_char_bytes(char_u *buf, int charlen)
 
     /* Copy bytes after the changed character(s). */
     p = newp + col;
-    mch_memmove(p + newlen, oldp + col + oldlen,
+    if (linelen > col + oldlen)
+	mch_memmove(p + newlen, oldp + col + oldlen,
 					    (size_t)(linelen - col - oldlen));
 
     /* Insert or overwrite the new character. */
@@ -2459,7 +2638,7 @@ del_chars(long count, int fixpos)
  * If "fixpos" is TRUE, don't leave the cursor on the NUL after the line.
  * Caller must have prepared for undo.
  *
- * return FAIL for failure, OK otherwise
+ * Return FAIL for failure, OK otherwise.
  */
     int
 del_bytes(
@@ -2478,11 +2657,20 @@ del_bytes(
     oldp = ml_get(lnum);
     oldlen = (int)STRLEN(oldp);
 
-    /*
-     * Can't do anything when the cursor is on the NUL after the line.
-     */
+    /* Can't do anything when the cursor is on the NUL after the line. */
     if (col >= oldlen)
 	return FAIL;
+
+    /* If "count" is zero there is nothing to do. */
+    if (count == 0)
+	return OK;
+
+    /* If "count" is negative the caller must be doing something wrong. */
+    if (count < 1)
+    {
+	IEMSGN("E950: Invalid count for del_bytes(): %ld", count);
+	return FAIL;
+    }
 
 #ifdef FEAT_MBYTE
     /* If 'delcombine' is set and deleting (less than) one character, only
@@ -2652,8 +2840,12 @@ del_lines(
     int
 gchar_pos(pos_T *pos)
 {
-    char_u	*ptr = ml_get_pos(pos);
+    char_u	*ptr;
 
+    /* When searching columns is sometimes put at the end of a line. */
+    if (pos->col == MAXCOL)
+	return NUL;
+    ptr = ml_get_pos(pos);
 #ifdef FEAT_MBYTE
     if (has_mbyte)
 	return (*mb_ptr2char)(ptr);
@@ -2727,12 +2919,15 @@ skip_to_option_part(char_u *p)
 changed(void)
 {
 #if defined(FEAT_XIM) && defined(FEAT_GUI_GTK)
-    /* The text of the preediting area is inserted, but this doesn't
-     * mean a change of the buffer yet.  That is delayed until the
-     * text is committed. (this means preedit becomes empty) */
-    if (im_is_preediting() && !xim_changed_while_preediting)
-	return;
-    xim_changed_while_preediting = FALSE;
+    if (p_imst == IM_ON_THE_SPOT)
+    {
+	/* The text of the preediting area is inserted, but this doesn't
+	 * mean a change of the buffer yet.  That is delayed until the
+	 * text is committed. (this means preedit becomes empty) */
+	if (im_is_preediting() && !xim_changed_while_preediting)
+	    return;
+	xim_changed_while_preediting = FALSE;
+    }
 #endif
 
     if (!curbuf->b_changed)
@@ -2783,10 +2978,8 @@ changed_int(void)
 {
     curbuf->b_changed = TRUE;
     ml_setflags(curbuf);
-#ifdef FEAT_WINDOWS
     check_status(curbuf);
     redraw_tabline = TRUE;
-#endif
 #ifdef FEAT_TITLE
     need_maketitle = TRUE;	    /* set window title later */
 #endif
@@ -2991,9 +3184,7 @@ changed_common(
     long	xtra)
 {
     win_T	*wp;
-#ifdef FEAT_WINDOWS
     tabpage_T	*tp;
-#endif
     int		i;
 #ifdef FEAT_JUMPLIST
     int		cols;
@@ -3173,12 +3364,10 @@ changed_common(
     if (must_redraw < VALID)
 	must_redraw = VALID;
 
-#ifdef FEAT_AUTOCMD
     /* when the cursor line is changed always trigger CursorMoved */
     if (lnum <= curwin->w_cursor.lnum
 		 && lnume + (xtra < 0 ? -xtra : xtra) > curwin->w_cursor.lnum)
 	last_cursormoved.lnum = 0;
-#endif
 }
 
 /*
@@ -3195,10 +3384,8 @@ unchanged(
 	ml_setflags(buf);
 	if (ff)
 	    save_file_ff(buf);
-#ifdef FEAT_WINDOWS
 	check_status(buf);
 	redraw_tabline = TRUE;
-#endif
 #ifdef FEAT_TITLE
 	need_maketitle = TRUE;	    /* set window title later */
 #endif
@@ -3209,7 +3396,6 @@ unchanged(
 #endif
 }
 
-#if defined(FEAT_WINDOWS) || defined(PROTO)
 /*
  * check_status: called when the status bars for the buffer 'buf'
  *		 need to be updated
@@ -3227,7 +3413,6 @@ check_status(buf_T *buf)
 		must_redraw = VALID;
 	}
 }
-#endif
 
 /*
  * If the file is readonly, give a warning message with the first change.
@@ -3246,18 +3431,14 @@ change_warning(
 
     if (curbuf->b_did_warn == FALSE
 	    && curbufIsChanged() == 0
-#ifdef FEAT_AUTOCMD
 	    && !autocmd_busy
-#endif
 	    && curbuf->b_p_ro)
     {
-#ifdef FEAT_AUTOCMD
 	++curbuf_lock;
 	apply_autocmds(EVENT_FILECHANGEDRO, NULL, NULL, FALSE, curbuf);
 	--curbuf_lock;
 	if (!curbuf->b_p_ro)
 	    return;
-#endif
 	/*
 	 * Do what msg() does, but with a column offset if the warning should
 	 * be after the mode message.
@@ -3352,6 +3533,7 @@ is_mouse_key(int c)
 	|| c == K_LEFTDRAG
 	|| c == K_LEFTRELEASE
 	|| c == K_LEFTRELEASE_NM
+	|| c == K_MOUSEMOVE
 	|| c == K_MIDDLEMOUSE
 	|| c == K_MIDDLEDRAG
 	|| c == K_MIDDLERELEASE
@@ -3593,6 +3775,11 @@ prompt_for_number(int *mouse_used)
     cmdline_row = 0;
     save_State = State;
     State = ASKMORE;	/* prevents a screen update when using a timer */
+#ifdef FEAT_MOUSE
+    /* May show different mouse shape. */
+    setmouse();
+#endif
+
 
     i = get_number(TRUE, mouse_used);
     if (KeyTyped)
@@ -3607,6 +3794,10 @@ prompt_for_number(int *mouse_used)
     else
 	cmdline_row = save_cmdline_row;
     State = save_State;
+#ifdef FEAT_MOUSE
+    /* May need to restore mouse shape. */
+    setmouse();
+#endif
 
     return i;
 }
@@ -3681,6 +3872,10 @@ beep_flush(void)
 vim_beep(
     unsigned val) /* one of the BO_ values, e.g., BO_OPER */
 {
+#ifdef FEAT_EVAL
+    called_vim_beep = TRUE;
+#endif
+
     if (emsg_silent == 0)
     {
 	if (!((bo_flags & val) || (bo_flags & BO_ALL)))
@@ -3703,7 +3898,22 @@ vim_beep(
 			&& !(gui.in_use && gui.starting)
 #endif
 			)
+		{
 		    out_str_cf(T_VB);
+#ifdef FEAT_VTP
+		    /* No restore color information, refresh the screen. */
+		    if (has_vtp_working() != 0
+# ifdef FEAT_TERMGUICOLORS
+			    && (p_tgc || (!p_tgc && t_colors >= 256))
+# endif
+			)
+		    {
+			redraw_later(CLEAR);
+			update_screen(0);
+			redrawcmd();
+		    }
+#endif
+		}
 		else
 		    out_char(BELL);
 #ifdef ELAPSED_FUNC
@@ -3711,8 +3921,9 @@ vim_beep(
 #endif
 	}
 
-	/* When 'verbose' is set and we are sourcing a script or executing a
-	 * function give the user a hint where the beep comes from. */
+	/* When 'debug' contains "beep" produce a message.  If we are sourcing
+	 * a script or executing a function give the user a hint where the beep
+	 * comes from. */
 	if (vim_strchr(p_debug, 'e') != NULL)
 	{
 	    msg_source(HL_ATTR(HLF_W));
@@ -3738,8 +3949,7 @@ init_homedir(void)
     char_u  *var;
 
     /* In case we are called a second time (when 'encoding' changes). */
-    vim_free(homedir);
-    homedir = NULL;
+    VIM_CLEAR(homedir);
 
 #ifdef VMS
     var = mch_getenv((char_u *)"SYS$LOGIN");
@@ -3747,10 +3957,33 @@ init_homedir(void)
     var = mch_getenv((char_u *)"HOME");
 #endif
 
-    if (var != NULL && *var == NUL)	/* empty is same as not set */
-	var = NULL;
-
 #ifdef WIN3264
+    /*
+     * Typically, $HOME is not defined on Windows, unless the user has
+     * specifically defined it for Vim's sake.  However, on Windows NT
+     * platforms, $HOMEDRIVE and $HOMEPATH are automatically defined for
+     * each user.  Try constructing $HOME from these.
+     */
+    if (var == NULL || *var == NUL)
+    {
+	char_u *homedrive, *homepath;
+
+	homedrive = mch_getenv((char_u *)"HOMEDRIVE");
+	homepath = mch_getenv((char_u *)"HOMEPATH");
+	if (homepath == NULL || *homepath == NUL)
+	    homepath = (char_u *)"\\";
+	if (homedrive != NULL
+			   && STRLEN(homedrive) + STRLEN(homepath) < MAXPATHL)
+	{
+	    sprintf((char *)NameBuff, "%s%s", homedrive, homepath);
+	    if (NameBuff[0] != NUL)
+		var = NameBuff;
+	}
+    }
+
+    if (var == NULL)
+	var = mch_getenv((char_u *)"USERPROFILE");
+
     /*
      * Weird but true: $HOME may contain an indirect reference to another
      * variable, esp. "%USERPROFILE%".  Happens when $USERPROFILE isn't set
@@ -3771,40 +4004,14 @@ init_homedir(void)
 	    {
 		vim_snprintf((char *)NameBuff, MAXPATHL, "%s%s", exp, p + 1);
 		var = NameBuff;
-		/* Also set $HOME, it's needed for _viminfo. */
-		vim_setenv((char_u *)"HOME", NameBuff);
 	    }
 	}
     }
 
-    /*
-     * Typically, $HOME is not defined on Windows, unless the user has
-     * specifically defined it for Vim's sake.  However, on Windows NT
-     * platforms, $HOMEDRIVE and $HOMEPATH are automatically defined for
-     * each user.  Try constructing $HOME from these.
-     */
-    if (var == NULL)
-    {
-	char_u *homedrive, *homepath;
+    if (var != NULL && *var == NUL)	/* empty is same as not set */
+	var = NULL;
 
-	homedrive = mch_getenv((char_u *)"HOMEDRIVE");
-	homepath = mch_getenv((char_u *)"HOMEPATH");
-	if (homepath == NULL || *homepath == NUL)
-	    homepath = (char_u *)"\\";
-	if (homedrive != NULL
-			   && STRLEN(homedrive) + STRLEN(homepath) < MAXPATHL)
-	{
-	    sprintf((char *)NameBuff, "%s%s", homedrive, homepath);
-	    if (NameBuff[0] != NUL)
-	    {
-		var = NameBuff;
-		/* Also set $HOME, it's needed for _viminfo. */
-		vim_setenv((char_u *)"HOME", NameBuff);
-	    }
-	}
-    }
-
-# if defined(FEAT_MBYTE)
+# ifdef FEAT_MBYTE
     if (enc_utf8 && var != NULL)
     {
 	int	len;
@@ -3820,9 +4027,7 @@ init_homedir(void)
 	}
     }
 # endif
-#endif
 
-#if defined(MSWIN)
     /*
      * Default home dir is C:/
      * Best assumption we can make in such a situation.
@@ -3830,6 +4035,7 @@ init_homedir(void)
     if (var == NULL)
 	var = (char_u *)"C:/";
 #endif
+
     if (var != NULL)
     {
 #ifdef UNIX
@@ -4177,13 +4383,18 @@ expand_env_esc(
 	    }
 	    else if ((src[0] == ' ' || src[0] == ',') && !one)
 		at_start = TRUE;
-	    *dst++ = *src++;
-	    --dstlen;
+	    if (dstlen > 0)
+	    {
+		*dst++ = *src++;
+		--dstlen;
 
-	    if (startstr != NULL && src - startstr_len >= srcp
-		    && STRNCMP(src - startstr_len, startstr, startstr_len) == 0)
-		at_start = TRUE;
+		if (startstr != NULL && src - startstr_len >= srcp
+			&& STRNCMP(src - startstr_len, startstr,
+							    startstr_len) == 0)
+		    at_start = TRUE;
+	    }
 	}
+
     }
     *dst = NUL;
 }
@@ -4340,12 +4551,8 @@ vim_getenv(char_u *name, int *mustfree)
 	    }
 
 	    /* remove trailing path separator */
-#ifndef MACOS_CLASSIC
-	    /* With MacOS path (with  colons) the final colon is required */
-	    /* to avoid confusion between absolute and relative path */
 	    if (pend > p && after_pathsep(p, pend))
 		--pend;
-#endif
 
 #ifdef MACOS_X
 	    if (p == exe_name || p == p_hf)
@@ -4354,10 +4561,7 @@ vim_getenv(char_u *name, int *mustfree)
 		p = vim_strnsave(p, (int)(pend - p));
 
 	    if (p != NULL && !mch_isdir(p))
-	    {
-		vim_free(p);
-		p = NULL;
-	    }
+		VIM_CLEAR(p);
 	    else
 	    {
 #ifdef USE_EXE_NAME
@@ -4456,6 +4660,17 @@ remove_tail(char_u *p, char_u *pend, char_u *name)
     return pend;
 }
 
+    void
+vim_unsetenv(char_u *var)
+{
+#ifdef HAVE_UNSETENV
+    unsetenv((char *)var);
+#else
+    vim_setenv(var, (char_u *)"");
+#endif
+}
+
+
 /*
  * Our portable version of setenv.
  */
@@ -4505,9 +4720,9 @@ get_env_name(
     expand_T	*xp UNUSED,
     int		idx)
 {
-# if defined(AMIGA) || defined(__MRC__) || defined(__SC__)
+# if defined(AMIGA)
     /*
-     * No environ[] on the Amiga and on the Mac (using MPW).
+     * No environ[] on the Amiga.
      */
     return NULL;
 # else
@@ -4569,6 +4784,28 @@ init_users(void)
 	    }
 	endpwent();
     }
+# elif defined(WIN3264)
+    {
+	char_u*		user;
+	DWORD		nusers = 0, ntotal = 0, i;
+	PUSER_INFO_0	uinfo;
+
+	if (NetUserEnum(NULL, 0, 0, (LPBYTE *) &uinfo, MAX_PREFERRED_LENGTH,
+				       &nusers, &ntotal, NULL) == NERR_Success)
+	{
+	    for (i = 0; i < nusers; i++)
+	    {
+		if (ga_grow(&ga_users, 1) == FAIL)
+		    break;
+		user = utf16_to_enc(uinfo[i].usri0_name, NULL);
+		if (user == NULL)
+		    break;
+		((char_u **)(ga_users.ga_data))[ga_users.ga_len++] = user;
+	    }
+
+	    NetApiBufferFree(uinfo);
+	}
+    }
 # endif
 }
 
@@ -4590,7 +4827,8 @@ get_users(expand_T *xp UNUSED, int idx)
  * 1 if name partially matches the beginning of a user name.
  * 2 is name fully matches a user name.
  */
-int match_user(char_u* name)
+    int
+match_user(char_u *name)
 {
     int i;
     int n = (int)STRLEN(name);
@@ -4638,7 +4876,7 @@ home_replace(
      */
     if (buf != NULL && buf->b_help)
     {
-	STRCPY(dst, gettail(src));
+	vim_snprintf((char *)dst, dstlen, "%s", gettail(src));
 	return;
     }
 
@@ -4653,6 +4891,10 @@ home_replace(
     homedir_env_orig = homedir_env = mch_getenv((char_u *)"SYS$LOGIN");
 #else
     homedir_env_orig = homedir_env = mch_getenv((char_u *)"HOME");
+#endif
+#ifdef WIN3264
+    if (homedir_env == NULL)
+	homedir_env_orig = homedir_env = mch_getenv((char_u *)"USERPROFILE");
 #endif
     /* Empty is the same as not set. */
     if (homedir_env != NULL && *homedir_env == NUL)
@@ -5015,8 +5257,6 @@ vim_ispathlistsep(int c)
 }
 #endif
 
-#if defined(FEAT_GUI_TABLINE) || defined(FEAT_WINDOWS) \
-	|| defined(FEAT_EVAL) || defined(PROTO)
 /*
  * Shorten the path of a file from "~/foo/../.bar/fname" to "~/f/../.b/fname"
  * It's done in-place.
@@ -5059,7 +5299,6 @@ shorten_dir(char_u *str)
 	}
     }
 }
-#endif
 
 /*
  * Return TRUE if the directory of "fname" exists, FALSE otherwise.
@@ -5213,7 +5452,7 @@ FullName_save(
 
 static char_u	*skip_string(char_u *p);
 static pos_T *ind_find_start_comment(void);
-static pos_T *ind_find_start_CORS(void);
+static pos_T *ind_find_start_CORS(linenr_T *is_raw);
 static pos_T *find_start_rawstring(int ind_maxcomment);
 
 /*
@@ -5264,11 +5503,12 @@ find_start_comment(int ind_maxcomment)	/* XXX */
  * Find the start of a comment or raw string, not knowing if we are in a
  * comment or raw string right now.
  * Search starts at w_cursor.lnum and goes backwards.
+ * If is_raw is given and returns start of raw_string, sets it to true.
  * Return NULL when not inside a comment or raw string.
  * "CORS" -> Comment Or Raw String
  */
     static pos_T *
-ind_find_start_CORS(void)	    /* XXX */
+ind_find_start_CORS(linenr_T *is_raw)	    /* XXX */
 {
     static pos_T comment_pos_copy;
     pos_T	*comment_pos;
@@ -5288,7 +5528,11 @@ ind_find_start_CORS(void)	    /* XXX */
      * If rs_pos is before comment_pos the comment is inside the raw string. */
     if (comment_pos == NULL || (rs_pos != NULL
 					     && LT_POS(*rs_pos, *comment_pos)))
+    {
+	if (is_raw != NULL && rs_pos != NULL)
+	    *is_raw = rs_pos->lnum;
 	return rs_pos;
+    }
     return comment_pos;
 }
 
@@ -5633,7 +5877,7 @@ cin_islabel(void)		/* XXX */
 	     * it.
 	     */
 	    curwin->w_cursor.col = 0;
-	    if ((trypos = ind_find_start_CORS()) != NULL) /* XXX */
+	    if ((trypos = ind_find_start_CORS(NULL)) != NULL) /* XXX */
 		curwin->w_cursor = *trypos;
 
 	    line = ml_get_curline();
@@ -6760,7 +7004,7 @@ find_start_brace(void)	    /* XXX */
 	pos = NULL;
 	/* ignore the { if it's in a // or / *  * / comment */
 	if ((colnr_T)cin_skip2pos(trypos) == trypos->col
-		       && (pos = ind_find_start_CORS()) == NULL) /* XXX */
+		       && (pos = ind_find_start_CORS(NULL)) == NULL) /* XXX */
 	    break;
 	if (pos != NULL)
 	    curwin->w_cursor.lnum = pos->lnum;
@@ -6811,7 +7055,7 @@ retry:
 	    pos_copy = *trypos;	    /* copy trypos, findmatch will change it */
 	    trypos = &pos_copy;
 	    curwin->w_cursor = *trypos;
-	    if ((trypos_wk = ind_find_start_CORS()) != NULL) /* XXX */
+	    if ((trypos_wk = ind_find_start_CORS(NULL)) != NULL) /* XXX */
 	    {
 		ind_maxp_wk = ind_maxparen - (int)(cursor_save.lnum
 			- trypos_wk->lnum);
@@ -7181,6 +7425,7 @@ get_c_indent(void)
     int		original_line_islabel;
     int		added_to_amount = 0;
     int		js_cur_has_key = 0;
+    linenr_T	raw_string_start = 0;
     cpp_baseclass_cache_T cache_cpp_baseclass = { FALSE, { MAXLNUM, 0 } };
 
     /* make a copy, value is changed below */
@@ -7483,7 +7728,7 @@ get_c_indent(void)
 		curwin->w_cursor.lnum = lnum;
 
 		/* Skip a comment or raw string. XXX */
-		if ((trypos = ind_find_start_CORS()) != NULL)
+		if ((trypos = ind_find_start_CORS(NULL)) != NULL)
 		{
 		    lnum = trypos->lnum + 1;
 		    continue;
@@ -7924,7 +8169,7 @@ get_c_indent(void)
 			 * If we're in a comment or raw string now, skip to
 			 * the start of it.
 			 */
-			trypos = ind_find_start_CORS();
+			trypos = ind_find_start_CORS(NULL);
 			if (trypos != NULL)
 			{
 			    curwin->w_cursor.lnum = trypos->lnum + 1;
@@ -8044,7 +8289,7 @@ get_c_indent(void)
 
 			    /* If we're in a comment or raw string now, skip
 			     * to the start of it. */
-			    trypos = ind_find_start_CORS();
+			    trypos = ind_find_start_CORS(NULL);
 			    if (trypos != NULL)
 			    {
 				curwin->w_cursor.lnum = trypos->lnum + 1;
@@ -8082,7 +8327,7 @@ get_c_indent(void)
 		 * If we're in a comment or raw string now, skip to the start
 		 * of it.
 		 */					    /* XXX */
-		if ((trypos = ind_find_start_CORS()) != NULL)
+		if ((trypos = ind_find_start_CORS(&raw_string_start)) != NULL)
 		{
 		    curwin->w_cursor.lnum = trypos->lnum + 1;
 		    curwin->w_cursor.col = 0;
@@ -8649,7 +8894,8 @@ get_c_indent(void)
 						       curwin->w_cursor.lnum);
 				if (lookfor != LOOKFOR_TERM
 						&& lookfor != LOOKFOR_JS_KEY
-						&& lookfor != LOOKFOR_COMMA)
+						&& lookfor != LOOKFOR_COMMA
+						&& raw_string_start != curwin->w_cursor.lnum)
 				    lookfor = LOOKFOR_UNTERM;
 			    }
 			}
@@ -8930,7 +9176,7 @@ term_again:
 	 * If we're in a comment or raw string now, skip to the start
 	 * of it.
 	 */						/* XXX */
-	if ((trypos = ind_find_start_CORS()) != NULL)
+	if ((trypos = ind_find_start_CORS(NULL)) != NULL)
 	{
 	    curwin->w_cursor.lnum = trypos->lnum + 1;
 	    curwin->w_cursor.col = 0;
@@ -9763,8 +10009,7 @@ expand_wildcards(
 	/* If the number of matches is now zero, we fail. */
 	if (*num_files == 0)
 	{
-	    vim_free(*files);
-	    *files = NULL;
+	    VIM_CLEAR(*files);
 	    return FAIL;
 	}
     }
@@ -10019,10 +10264,7 @@ dos_expandpath(
 	    hFind = FindFirstFileW(wn, &wfb);
 	    if (hFind == INVALID_HANDLE_VALUE
 			      && GetLastError() == ERROR_CALL_NOT_IMPLEMENTED)
-	    {
-		vim_free(wn);
-		wn = NULL;
-	    }
+		VIM_CLEAR(wn);
 	}
     }
 
@@ -10110,8 +10352,7 @@ dos_expandpath(
 # endif
 		hFind = FindFirstFile((LPCSTR)buf, &fb);
 	    ok = (hFind != INVALID_HANDLE_VALUE);
-	    vim_free(matchname);
-	    matchname = NULL;
+	    VIM_CLEAR(matchname);
 	}
     }
 
@@ -10758,6 +10999,7 @@ expand_in_path(
     char_u	*curdir;
     garray_T	path_ga;
     char_u	*paths = NULL;
+    int		glob_flags = 0;
 
     if ((curdir = alloc((unsigned)MAXPATHL)) == NULL)
 	return 0;
@@ -10774,7 +11016,11 @@ expand_in_path(
     if (paths == NULL)
 	return 0;
 
-    globpath(paths, pattern, gap, (flags & EW_ICASE) ? WILD_ICASE : 0);
+    if (flags & EW_ICASE)
+	glob_flags |= WILD_ICASE;
+    if (flags & EW_ADDSLASH)
+	glob_flags |= WILD_ADD_SLASH;
+    globpath(paths, pattern, gap, glob_flags);
     vim_free(paths);
 
     return gap->ga_len;
@@ -10994,9 +11240,6 @@ gen_expand_wildcards(
 	{
 	    char_u	*t = backslash_halve_save(p);
 
-#if defined(MACOS_CLASSIC)
-	    slash_to_colon(t);
-#endif
 	    /* When EW_NOTFOUND is used, always add files and dirs.  Makes
 	     * "vim c:/" work. */
 	    if (flags & EW_NOTFOUND)
@@ -11242,8 +11485,7 @@ get_cmd_output(
     if (i != len)
     {
 	EMSG2(_(e_notread), tempname);
-	vim_free(buffer);
-	buffer = NULL;
+	VIM_CLEAR(buffer);
     }
     else if (ret_len == NULL)
     {

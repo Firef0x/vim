@@ -1160,7 +1160,6 @@ gui_mch_create_scrollbar(scrollbar_T *sb, int orient)
     }
 }
 
-#if defined(FEAT_WINDOWS) || defined(PROTO)
     void
 gui_mch_destroy_scrollbar(scrollbar_T *sb)
 {
@@ -1171,7 +1170,6 @@ gui_mch_destroy_scrollbar(scrollbar_T *sb)
     }
     gui_mch_update();
 }
-#endif
 
 #if defined(FEAT_BROWSE) || defined(PROTO)
 /*
@@ -1897,8 +1895,8 @@ gui_mch_show_popupmenu(vimmenu_T *menu)
 	trigger.window     = gtk_widget_get_window(gui.drawarea);
 	trigger.send_event = FALSE;
 	trigger.time       = gui.event_time;
-	trigger.x          = 0.0;
-	trigger.y          = 0.0;
+	trigger.x	   = 0.0;
+	trigger.y	   = 0.0;
 	trigger.axes       = NULL;
 	trigger.state      = 0;
 	trigger.button     = 3;
@@ -1956,7 +1954,7 @@ popup_menu_position_func(GtkMenu *menu UNUSED,
 # endif
     {
 	/* Find the cursor position in the current window */
-	*x += FILL_X(W_WINCOL(curwin) + curwin->w_wcol + 1) + 1;
+	*x += FILL_X(curwin->w_wincol + curwin->w_wcol + 1) + 1;
 	*y += FILL_Y(W_WINROW(curwin) + curwin->w_wrow + 1) + 1;
     }
 }
@@ -1985,8 +1983,8 @@ gui_make_popup(char_u *path_name, int mouse_pos)
 	trigger.window     = win;
 	trigger.send_event = FALSE;
 	trigger.time       = GDK_CURRENT_TIME;
-	trigger.x          = 0.0;
-	trigger.y          = 0.0;
+	trigger.x	   = 0.0;
+	trigger.y	   = 0.0;
 	trigger.axes       = NULL;
 	trigger.state      = 0;
 	trigger.button     = 0;
@@ -2146,6 +2144,37 @@ convert_localized_message(char_u **buffer, const char *message)
     return (const char *)*buffer;
 }
 
+/*
+ * Returns the number of characters in GtkEntry.
+ */
+    static unsigned long
+entry_get_text_length(GtkEntry *entry)
+{
+    g_return_val_if_fail(entry != NULL, 0);
+    g_return_val_if_fail(GTK_IS_ENTRY(entry) == TRUE, 0);
+
+#if GTK_CHECK_VERSION(2,18,0)
+    /* 2.18 introduced a new object GtkEntryBuffer to handle text data for
+     * GtkEntry instead of letting each instance of the latter have its own
+     * storage for that.  The code below is almost identical to the
+     * implementation of gtk_entry_get_text_length() for the versions >= 2.18.
+     */
+    return gtk_entry_buffer_get_length(gtk_entry_get_buffer(entry));
+#elif GTK_CHECK_VERSION(2,14,0)
+    /* 2.14 introduced a new function to avoid memory management bugs which can
+     * happen when gtk_entry_get_text() is used without due care and attention.
+     */
+    return gtk_entry_get_text_length(entry);
+#else
+    /* gtk_entry_get_text() returns the pointer to the storage allocated
+     * internally by the widget.  Accordingly, use the one with great care:
+     * Don't free it nor modify the contents it points to; call the function
+     * every time you need the pointer since its value may have been changed
+     * by the widget. */
+    return g_utf8_strlen(gtk_entry_get_text(entry), -1);
+#endif
+}
+
     static void
 find_replace_dialog_create(char_u *arg, int do_replace)
 {
@@ -2195,6 +2224,14 @@ find_replace_dialog_create(char_u *arg, int do_replace)
 #endif
 	}
 	gtk_window_present(GTK_WINDOW(frdp->dialog));
+
+	/* For :promptfind dialog, always give keyboard focus to 'what' entry.
+	 * For :promptrepl dialog, give it to 'with' entry if 'what' has an
+	 * non-empty entry; otherwise, to 'what' entry. */
+	gtk_widget_grab_focus(frdp->what);
+	if (do_replace && entry_get_text_length(GTK_ENTRY(frdp->what)) > 0)
+	    gtk_widget_grab_focus(frdp->with);
+
 	vim_free(entry_text);
 	return;
     }

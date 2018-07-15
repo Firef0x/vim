@@ -4,6 +4,7 @@
 
 # Use console or GUI.
 VIMPROG = ../vim
+XXDPROG = ../xxd/xxd
 # VIMPROG = ../gvim
 
 SCRIPTSOURCE = ../../runtime
@@ -24,7 +25,6 @@ include Make_all.mak
 SCRIPTS = $(SCRIPTS_ALL) \
 	  $(SCRIPTS_MORE1) \
 	  $(SCRIPTS_MORE2) \
-	  $(SCRIPTS_MORE3) \
 	  $(SCRIPTS_MORE4)
 
 SCRIPTS_BENCH = bench_re_freeze.out
@@ -51,7 +51,7 @@ $(SCRIPTS_FIRST) $(SCRIPTS) $(SCRIPTS_GUI) $(NEW_TESTS): $(VIMPROG)
 $(SCRIPTS) $(SCRIPTS_GUI) $(NEW_TESTS): $(SCRIPTS_FIRST)
 
 RM_ON_RUN = test.out X* viminfo
-RM_ON_START = tiny.vim small.vim mbyte.vim mzscheme.vim lua.vim test.ok benchmark.out
+RM_ON_START = tiny.vim small.vim mbyte.vim mzscheme.vim test.ok benchmark.out
 RUN_VIM = VIMRUNTIME=$(SCRIPTSOURCE); export VIMRUNTIME; $(VALGRIND) $(VIMPROG) -f $(GUI_FLAG) -u unix.vim $(NO_INITS) -s dotest.in
 
 clean:
@@ -126,20 +126,26 @@ newtests: newtestssilent
 newtestssilent: $(NEW_TESTS)
 
 
-.vim.res:
-	@echo "$(RUN_VIMTEST)" > vimcmd
+.vim.res: writevimcmd
+	@echo "$(VIMPROG)" > vimcmd
+	@echo "$(RUN_VIMTEST)" >> vimcmd
 	$(RUN_VIMTEST) $(NO_INITS) -S runtest.vim $*.vim
 	@rm vimcmd
 
 test_gui.res: test_gui.vim
-	@echo "$(RUN_GVIMTEST)" > vimcmd
+	@echo "$(VIMPROG)" > vimcmd
+	@echo "$(RUN_GVIMTEST)" >> vimcmd
 	$(RUN_VIMTEST) -u NONE $(NO_INITS) -S runtest.vim $<
 	@rm vimcmd
 
 test_gui_init.res: test_gui_init.vim
-	@echo "$(RUN_GVIMTEST_WITH_GVIMRC)" > vimcmd
+	@echo "$(VIMPROG)" > vimcmd
+	@echo "$(RUN_GVIMTEST_WITH_GVIMRC)" >> vimcmd
 	$(RUN_VIMTEST) -u gui_preinit.vim -U gui_init.vim $(NO_PLUGINS) -S runtest.vim $<
 	@rm vimcmd
 
 opt_test.vim: ../option.c gen_opt_test.vim
 	$(VIMPROG) -u NONE -S gen_opt_test.vim --noplugin --not-a-term ../option.c
+
+test_xxd.res:
+	XXD=$(XXDPROG); export XXD; $(RUN_VIMTEST) $(NO_INITS) -S runtest.vim test_xxd.vim

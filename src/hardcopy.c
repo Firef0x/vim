@@ -915,7 +915,12 @@ hardcopy_line(
 	if (line[col] == TAB || tab_spaces != 0)
 	{
 	    if (tab_spaces == 0)
+#ifdef FEAT_VARTABS
+		tab_spaces = tabstop_padding(print_pos, curbuf->b_p_ts,
+							curbuf->b_p_vts_array);
+#else
 		tab_spaces = (int)(curbuf->b_p_ts - (print_pos % curbuf->b_p_ts));
+#endif
 
 	    while (tab_spaces > 0)
 	    {
@@ -2210,8 +2215,7 @@ mch_print_cleanup(void)
 	for (i = PRT_PS_FONT_ROMAN; i <= PRT_PS_FONT_BOLDOBLIQUE; i++)
 	{
 	    if (prt_ps_mb_font.ps_fontname[i] != NULL)
-		vim_free(prt_ps_mb_font.ps_fontname[i]);
-	    prt_ps_mb_font.ps_fontname[i] = NULL;
+		VIM_CLEAR(prt_ps_mb_font.ps_fontname[i]);
 	}
     }
 
@@ -2228,10 +2232,7 @@ mch_print_cleanup(void)
 	prt_file_error = FALSE;
     }
     if (prt_ps_file_name != NULL)
-    {
-	vim_free(prt_ps_file_name);
-	prt_ps_file_name = NULL;
-    }
+	VIM_CLEAR(prt_ps_file_name);
 }
 
     static float
@@ -3376,8 +3377,9 @@ mch_print_start_line(int margin, int page_line)
 }
 
     int
-mch_print_text_out(char_u *p, int len UNUSED)
+mch_print_text_out(char_u *textp, int len UNUSED)
 {
+    char_u	*p = textp;
     int		need_break;
     char_u	ch;
     char_u      ch_buff[8];
@@ -3386,6 +3388,7 @@ mch_print_text_out(char_u *p, int len UNUSED)
 #ifdef FEAT_MBYTE
     int		in_ascii;
     int		half_width;
+    char_u	*tofree = NULL;
 #endif
 
     char_width = prt_char_width;
@@ -3513,9 +3516,12 @@ mch_print_text_out(char_u *p, int len UNUSED)
     if (prt_do_conv)
     {
 	/* Convert from multi-byte to 8-bit encoding */
-	p = string_convert(&prt_conv, p, &len);
+	tofree = p = string_convert(&prt_conv, p, &len);
 	if (p == NULL)
+	{
 	    p = (char_u *)"";
+	    len = 0;
+	}
     }
 
     if (prt_out_mbyte)
@@ -3523,7 +3529,7 @@ mch_print_text_out(char_u *p, int len UNUSED)
 	/* Multi-byte character strings are represented more efficiently as hex
 	 * strings when outputting clean 8 bit PS.
 	 */
-	do
+	while (len-- > 0)
 	{
 	    ch = prt_hexchar[(unsigned)(*p) >> 4];
 	    ga_append(&prt_ps_buffer, ch);
@@ -3531,7 +3537,6 @@ mch_print_text_out(char_u *p, int len UNUSED)
 	    ga_append(&prt_ps_buffer, ch);
 	    p++;
 	}
-	while (--len);
     }
     else
 #endif
@@ -3578,8 +3583,7 @@ mch_print_text_out(char_u *p, int len UNUSED)
 
 #ifdef FEAT_MBYTE
     /* Need to free any translated characters */
-    if (prt_do_conv && (*p != NUL))
-	vim_free(p);
+    vim_free(tofree);
 #endif
 
     prt_text_run += char_width;

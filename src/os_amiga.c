@@ -152,7 +152,6 @@ mch_inchar(
 	 */
 	if (WaitForChar(raw_in, p_ut * 1000L) == 0)
 	{
-#ifdef FEAT_AUTOCMD
 	    if (trigger_cursorhold() && maxlen >= 3)
 	    {
 		buf[0] = K_SPECIAL;
@@ -160,7 +159,6 @@ mch_inchar(
 		buf[2] = (int)KE_CURSORHOLD;
 		return 3;
 	    }
-#endif
 	    before_blocking();
 	}
     }
@@ -1619,8 +1617,7 @@ mch_getenv(char_u *var)
     else
 #endif
     {
-	vim_free(alloced);
-	alloced = NULL;
+	VIM_CLEAR(alloced);
 	retval = NULL;
 
 	buf = alloc(IOSIZE);

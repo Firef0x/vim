@@ -65,13 +65,19 @@ func Test_argadd()
   %argd
   edit d
   arga
-  call assert_equal(len(argv()), 1)
-  call assert_equal(get(argv(), 0, ''), 'd')
+  call assert_equal(1, len(argv()))
+  call assert_equal('d', get(argv(), 0, ''))
+
+  %argd
+  edit some\ file
+  arga
+  call assert_equal(1, len(argv()))
+  call assert_equal('some file', get(argv(), 0, ''))
 
   %argd
   new
   arga
-  call assert_equal(len(argv()), 0)
+  call assert_equal(0, len(argv()))
 endfunc
 
 func Init_abc()
@@ -116,9 +122,9 @@ func Test_argument()
   call assert_equal(['d', 'c', 'b', 'a', 'c'], g:buffers)
 
   redir => result
-  ar
+  args
   redir END
-  call assert_true(result =~# 'a b \[c] d')
+  call assert_equal('a   b   [c] d', trim(result))
 
   .argd
   call assert_equal(['a', 'b', 'd'], argv())
@@ -162,6 +168,34 @@ func Test_argument()
 
   %argdelete
   call assert_fails('argument', 'E163:')
+endfunc
+
+func Test_list_arguments()
+  " Clean the argument list
+  arga a | %argd
+
+  " four args half the screen width makes two lines with two columns
+  let aarg = repeat('a', &columns / 2 - 4)
+  let barg = repeat('b', &columns / 2 - 4)
+  let carg = repeat('c', &columns / 2 - 4)
+  let darg = repeat('d', &columns / 2 - 4)
+  exe 'argadd ' aarg barg carg darg
+
+  redir => result
+  args
+  redir END
+  call assert_match('\[' . aarg . '] \+' . carg . '\n' . barg . ' \+' . darg, trim(result))
+
+  " if one arg is longer than half the screen make one column
+  exe 'argdel' aarg
+  let aarg = repeat('a', &columns / 2 + 2)
+  exe '0argadd' aarg
+  redir => result
+  args
+  redir END
+  call assert_match(aarg . '\n\[' . barg . ']\n' . carg . '\n' . darg, trim(result))
+
+  %argdelete
 endfunc
 
 " Test for 0argadd and 0argedit
@@ -247,10 +281,7 @@ func Test_argedit()
   call assert_equal(['a', 'b', 'a'], argv())
   call assert_equal('a', expand('%:t'))
   " When file name case is ignored, an existing buffer with only case
-  " difference is re-used.  Make sure they don't exist so the case is
-  " preserved.
-  bwipe! c
-  bwipe! d
+  " difference is re-used.
   argedit C D
   call assert_equal('C', expand('%:t'))
   call assert_equal(['a', 'b', 'a', 'C', 'D'], argv())
@@ -277,6 +308,18 @@ func Test_argedit()
   %argd
   bwipe! C
   bwipe! D
+
+  " :argedit reuses the current buffer if it is empty
+  %argd
+  " make sure to use a new buffer number for x when it is loaded
+  bw! x
+  new
+  let a = bufnr('')
+  argedit x
+  call assert_equal(a, bufnr(''))
+  call assert_equal('x', bufname(''))
+  %argd
+  bw! x
 endfunc
 
 " Test for the :argdelete command

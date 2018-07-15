@@ -1,5 +1,21 @@
 " Tests for various functions.
 
+" Must be done first, since the alternate buffer must be unset.
+func Test_00_bufexists()
+  call assert_equal(0, bufexists('does_not_exist'))
+  call assert_equal(1, bufexists(bufnr('%')))
+  call assert_equal(0, bufexists(0))
+  new Xfoo
+  let bn = bufnr('%')
+  call assert_equal(1, bufexists(bn))
+  call assert_equal(1, bufexists('Xfoo'))
+  call assert_equal(1, bufexists(getcwd() . '/Xfoo'))
+  call assert_equal(1, bufexists(0))
+  bw
+  call assert_equal(0, bufexists(bn))
+  call assert_equal(0, bufexists('Xfoo'))
+endfunc
+
 func Test_empty()
   call assert_equal(1, empty(''))
   call assert_equal(0, empty('a'))
@@ -78,6 +94,30 @@ func Test_min()
 
   call assert_fails('call min(1)', 'E712:')
   call assert_fails('call min(v:none)', 'E712:')
+endfunc
+
+func Test_strwidth()
+  for aw in ['single', 'double']
+    exe 'set ambiwidth=' . aw
+    call assert_equal(0, strwidth(''))
+    call assert_equal(1, strwidth("\t"))
+    call assert_equal(3, strwidth('Vim'))
+    call assert_equal(4, strwidth(1234))
+    call assert_equal(5, strwidth(-1234))
+
+    if has('multi_byte')
+      call assert_equal(2, strwidth('😉'))
+      call assert_equal(17, strwidth('Eĥoŝanĝo ĉiuĵaŭde'))
+      call assert_equal((aw == 'single') ? 6 : 7, strwidth('Straße'))
+    endif
+
+    call assert_fails('call strwidth({->0})', 'E729:')
+    call assert_fails('call strwidth([])', 'E730:')
+    call assert_fails('call strwidth({})', 'E731:')
+    call assert_fails('call strwidth(1.2)', 'E806:')
+  endfor
+
+  set ambiwidth&
 endfunc
 
 func Test_str2nr()
@@ -168,6 +208,19 @@ func Test_simplify()
   call assert_fails('call simplify(1.2)', 'E806:')
 endfunc
 
+func Test_strpart()
+  call assert_equal('de', strpart('abcdefg', 3, 2))
+  call assert_equal('ab', strpart('abcdefg', -2, 4))
+  call assert_equal('abcdefg', strpart('abcdefg', -2))
+  call assert_equal('fg', strpart('abcdefg', 5, 4))
+  call assert_equal('defg', strpart('abcdefg', 3))
+
+  if has('multi_byte')
+    call assert_equal('lép', strpart('éléphant', 2, 4))
+    call assert_equal('léphant', strpart('éléphant', 2))
+  endif
+endfunc
+
 func Test_tolower()
   call assert_equal("", tolower(""))
 
@@ -239,6 +292,11 @@ func Test_tolower()
   " Ⱥ (U+023A) and Ⱦ (U+023E) are the *only* code points to increase
   " in length (2 to 3 bytes) when lowercased. So let's test them.
   call assert_equal("ⱥ ⱦ", tolower("Ⱥ Ⱦ"))
+
+  " This call to tolower with invalid utf8 sequence used to cause access to
+  " invalid memory.
+  call tolower("\xC0\x80\xC0")
+  call tolower("123\xC0\x80\xC0")
 endfunc
 
 func Test_toupper()
@@ -309,6 +367,11 @@ func Test_toupper()
   call assert_equal("ZŹŻŽƵẐẔ", toupper("ZŹŻŽƵẐẔ"))
 
   call assert_equal("Ⱥ Ⱦ", toupper("ⱥ ⱦ"))
+
+  " This call to toupper with invalid utf8 sequence used to cause access to
+  " invalid memory.
+  call toupper("\xC0\x80\xC0")
+  call toupper("123\xC0\x80\xC0")
 endfunc
 
 " Tests for the mode() function
@@ -478,21 +541,6 @@ func Test_getbufvar()
   set fileformats&
 endfunc
 
-func Test_bufexists()
-  call assert_equal(0, bufexists('does_not_exist'))
-  call assert_equal(1, bufexists(bufnr('%')))
-  call assert_equal(0, bufexists(0))
-  new Xfoo
-  let bn = bufnr('%')
-  call assert_equal(1, bufexists(bn))
-  call assert_equal(1, bufexists('Xfoo'))
-  call assert_equal(1, bufexists(getcwd() . '/Xfoo'))
-  call assert_equal(1, bufexists(0))
-  bw
-  call assert_equal(0, bufexists(bn))
-  call assert_equal(0, bufexists('Xfoo'))
-endfunc
-
 func Test_last_buffer_nr()
   call assert_equal(bufnr('$'), last_buffer_nr())
 endfunc
@@ -528,10 +576,46 @@ func Test_strridx()
   call assert_equal(-1, strridx('hello', 'hello world'))
 endfunc
 
+func Test_match_func()
+  call assert_equal(4,  match('testing', 'ing'))
+  call assert_equal(4,  match('testing', 'ing', 2))
+  call assert_equal(-1, match('testing', 'ing', 5))
+  call assert_equal(-1, match('testing', 'ing', 8))
+  call assert_equal(1, match(['vim', 'testing', 'execute'], 'ing'))
+  call assert_equal(-1, match(['vim', 'testing', 'execute'], 'img'))
+endfunc
+
 func Test_matchend()
   call assert_equal(7,  matchend('testing', 'ing'))
   call assert_equal(7,  matchend('testing', 'ing', 2))
   call assert_equal(-1, matchend('testing', 'ing', 5))
+  call assert_equal(-1, matchend('testing', 'ing', 8))
+  call assert_equal(match(['vim', 'testing', 'execute'], 'ing'), matchend(['vim', 'testing', 'execute'], 'ing'))
+  call assert_equal(match(['vim', 'testing', 'execute'], 'img'), matchend(['vim', 'testing', 'execute'], 'img'))
+endfunc
+
+func Test_matchlist()
+  call assert_equal(['acd', 'a', '', 'c', 'd', '', '', '', '', ''],  matchlist('acd', '\(a\)\?\(b\)\?\(c\)\?\(.*\)'))
+  call assert_equal(['d', '', '', '', 'd', '', '', '', '', ''],  matchlist('acd', '\(a\)\?\(b\)\?\(c\)\?\(.*\)', 2))
+  call assert_equal([],  matchlist('acd', '\(a\)\?\(b\)\?\(c\)\?\(.*\)', 4))
+endfunc
+
+func Test_matchstr()
+  call assert_equal('ing',  matchstr('testing', 'ing'))
+  call assert_equal('ing',  matchstr('testing', 'ing', 2))
+  call assert_equal('', matchstr('testing', 'ing', 5))
+  call assert_equal('', matchstr('testing', 'ing', 8))
+  call assert_equal('testing', matchstr(['vim', 'testing', 'execute'], 'ing'))
+  call assert_equal('', matchstr(['vim', 'testing', 'execute'], 'img'))
+endfunc
+
+func Test_matchstrpos()
+  call assert_equal(['ing', 4, 7], matchstrpos('testing', 'ing'))
+  call assert_equal(['ing', 4, 7], matchstrpos('testing', 'ing', 2))
+  call assert_equal(['', -1, -1], matchstrpos('testing', 'ing', 5))
+  call assert_equal(['', -1, -1], matchstrpos('testing', 'ing', 8))
+  call assert_equal(['ing', 1, 4, 7], matchstrpos(['vim', 'testing', 'execute'], 'ing'))
+  call assert_equal(['', -1, -1, -1], matchstrpos(['vim', 'testing', 'execute'], 'img'))
 endfunc
 
 func Test_nextnonblank_prevnonblank()
@@ -635,7 +719,14 @@ func Test_count()
   call assert_equal(0, count(d, 'c', 1))
 
   call assert_fails('call count(d, "a", 0, 1)', 'E474:')
-  call assert_fails('call count("a", "a")', 'E712:')
+
+  call assert_equal(0, count("foo", "bar"))
+  call assert_equal(1, count("foo", "oo"))
+  call assert_equal(2, count("foo", "o"))
+  call assert_equal(0, count("foo", "O"))
+  call assert_equal(2, count("foo", "O", 1))
+  call assert_equal(2, count("fooooo", "oo"))
+  call assert_equal(0, count("foo", ""))
 endfunc
 
 func Test_changenr()
@@ -808,4 +899,88 @@ func Test_shellescape()
   call assert_equal("'te\\\\\nxt'", shellescape("te\nxt", 1))
 
   let &shell = save_shell
+endfunc
+
+func Test_trim()
+  call assert_equal("Testing", trim("  \t\r\r\x0BTesting  \t\n\r\n\t\x0B\x0B"))
+  call assert_equal("Testing", trim("  \t  \r\r\n\n\x0BTesting  \t\n\r\n\t\x0B\x0B"))
+  call assert_equal("RESERVE", trim("xyz \twwRESERVEzyww \t\t", " wxyz\t"))
+  call assert_equal("wRE    \tSERVEzyww", trim("wRE    \tSERVEzyww"))
+  call assert_equal("abcd\t     xxxx   tail", trim(" \tabcd\t     xxxx   tail"))
+  call assert_equal("\tabcd\t     xxxx   tail", trim(" \tabcd\t     xxxx   tail", " "))
+  call assert_equal(" \tabcd\t     xxxx   tail", trim(" \tabcd\t     xxxx   tail", "abx"))
+  call assert_equal("RESERVE", trim("你RESERVE好", "你好"))
+  call assert_equal("您R E SER V E早", trim("你好您R E SER V E早好你你", "你好"))
+  call assert_equal("你好您R E SER V E早好你你", trim(" \n\r\r   你好您R E SER V E早好你你    \t  \x0B", ))
+  call assert_equal("您R E SER V E早好你你    \t  \x0B", trim("    你好您R E SER V E早好你你    \t  \x0B", " 你好"))
+  call assert_equal("您R E SER V E早好你你    \t  \x0B", trim("    tteesstttt你好您R E SER V E早好你你    \t  \x0B ttestt", " 你好tes"))
+  call assert_equal("您R E SER V E早好你你    \t  \x0B", trim("    tteesstttt你好您R E SER V E早好你你    \t  \x0B ttestt", "   你你你好好好tttsses"))
+  call assert_equal("留下", trim("这些些不要这些留下这些", "这些不要"))
+  call assert_equal("", trim("", ""))
+  call assert_equal("a", trim("a", ""))
+  call assert_equal("", trim("", "a"))
+
+  let chars = join(map(range(1, 0x20) + [0xa0], {n -> nr2char(n)}), '')
+  call assert_equal("x", trim(chars . "x" . chars))
+endfunc
+
+" Test for reg_recording() and reg_executing()
+func Test_reg_executing_and_recording()
+  let s:reg_stat = ''
+  func s:save_reg_stat()
+    let s:reg_stat = reg_recording() . ':' . reg_executing()
+    return ''
+  endfunc
+
+  new
+  call s:save_reg_stat()
+  call assert_equal(':', s:reg_stat)
+  call feedkeys("qa\"=s:save_reg_stat()\<CR>pq", 'xt')
+  call assert_equal('a:', s:reg_stat)
+  call feedkeys("@a", 'xt')
+  call assert_equal(':a', s:reg_stat)
+  call feedkeys("qb@aq", 'xt')
+  call assert_equal('b:a', s:reg_stat)
+  call feedkeys("q\"\"=s:save_reg_stat()\<CR>pq", 'xt')
+  call assert_equal('":', s:reg_stat)
+
+  bwipe!
+  delfunc s:save_reg_stat
+  unlet s:reg_stat
+endfunc
+
+func Test_libcall_libcallnr()
+  if !has('libcall')
+    return
+  endif
+
+  if has('win32')
+    let libc = 'msvcrt.dll'
+  elseif has('mac')
+    let libc = 'libSystem.B.dylib'
+  else
+    " On Unix, libc.so can be in various places.
+    " Interestingly, using an empty string for the 1st argument of libcall
+    " allows to call functions from libc which is not documented.
+    let libc = ''
+  endif
+
+  if has('win32')
+    call assert_equal($USERPROFILE, libcall(libc, 'getenv', 'USERPROFILE'))
+  else
+    call assert_equal($HOME, libcall(libc, 'getenv', 'HOME'))
+  endif
+
+  " If function returns NULL, libcall() should return an empty string.
+  call assert_equal('', libcall(libc, 'getenv', 'X_ENV_DOES_NOT_EXIT'))
+
+  " Test libcallnr() with string and integer argument.
+  call assert_equal(4, libcallnr(libc, 'strlen', 'abcd'))
+  call assert_equal(char2nr('A'), libcallnr(libc, 'toupper', char2nr('a')))
+
+  call assert_fails("call libcall(libc, 'Xdoesnotexist_', '')", 'E364:')
+  call assert_fails("call libcallnr(libc, 'Xdoesnotexist_', '')", 'E364:')
+
+  call assert_fails("call libcall('Xdoesnotexist_', 'getenv', 'HOME')", 'E364:')
+  call assert_fails("call libcallnr('Xdoesnotexist_', 'strlen', 'abcd')", 'E364:')
 endfunc

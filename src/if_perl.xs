@@ -1101,6 +1101,7 @@ perl_to_vim(SV *sv, typval_T *rettv)
 		rettv->vval.v_number = SvIV(sv);
 		break;
 	    }
+	    /* FALLTHROUGH */
 	case SVt_PV:	/* string */
 	{
 	    size_t  len		= 0;
@@ -1199,10 +1200,8 @@ perl_to_vim(SV *sv, typval_T *rettv)
 
 		    if ((item = dictitem_alloc((char_u *)key)) == NULL)
 			break;
-
-		    item->di_tv.v_type		= VAR_NUMBER;
-		    item->di_tv.v_lock		= 0;
-		    item->di_tv.vval.v_number	= 0;
+		    item->di_tv.v_type = VAR_NUMBER;
+		    item->di_tv.vval.v_number = 0;
 
 		    if (dict_add(dict, item) == FAIL) {
 			dictitem_free(item);
@@ -1387,11 +1386,8 @@ PerlIOVim_pushed(pTHX_ PerlIO *f, const char *mode,
 {
     PerlIOVim *s = PerlIOSelf(f, PerlIOVim);
     s->attr = 0;
-    if (arg && SvPOK(arg)) {
-	int id = syn_name2id((char_u *)SvPV_nolen(arg));
-	if (id != 0)
-	    s->attr = syn_id2attr(id);
-    }
+    if (arg && SvPOK(arg))
+	s->attr = syn_name2attr((char_u *)SvPV_nolen(arg));
     return PerlIOBase_pushed(aTHX_ f, mode, (SV *)NULL, tab);
 }
 
@@ -1451,24 +1447,6 @@ vim_IOLayer_init(void)
 }
 #endif /* PERLIO_LAYERS && !USE_SFIO */
 
-#ifndef FEAT_WINDOWS
-    int
-win_valid(win_T *w)
-{
-    return TRUE;
-}
-    int
-win_count(void)
-{
-    return 1;
-}
-    win_T *
-win_find_nr(int n)
-{
-    return curwin;
-}
-#endif
-
 XS(boot_VIM);
 
     static void
@@ -1493,18 +1471,13 @@ Msg(text, hl=NULL)
 
     PREINIT:
     int		attr;
-    int		id;
 
     PPCODE:
     if (text != NULL)
     {
 	attr = 0;
 	if (hl != NULL)
-	{
-	    id = syn_name2id((char_u *)hl);
-	    if (id != 0)
-		attr = syn_id2attr(id);
-	}
+	    attr = syn_name2attr((char_u *)hl);
 	msg_split((char_u *)text, attr);
     }
 
@@ -1583,7 +1556,7 @@ Buffers(...)
 
 		pat = (char_u *)SvPV(sv, len);
 		++emsg_off;
-		b = buflist_findpat(pat, pat+len, FALSE, FALSE, FALSE);
+		b = buflist_findpat(pat, pat + len, TRUE, FALSE, FALSE);
 		--emsg_off;
 	    }
 

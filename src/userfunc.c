@@ -14,13 +14,14 @@
 #include "vim.h"
 
 #if defined(FEAT_EVAL) || defined(PROTO)
-/* function flags */
-#define FC_ABORT    0x01	/* abort function on error */
-#define FC_RANGE    0x02	/* function accepts range */
-#define FC_DICT	    0x04	/* Dict function, uses "self" */
-#define FC_CLOSURE  0x08	/* closure, uses outer scope variables */
-#define FC_DELETED  0x10	/* :delfunction used while uf_refcount > 0 */
-#define FC_REMOVED  0x20	/* function redefined while uf_refcount > 0 */
+// flags used in uf_flags
+#define FC_ABORT    0x01	// abort function on error
+#define FC_RANGE    0x02	// function accepts range
+#define FC_DICT	    0x04	// Dict function, uses "self"
+#define FC_CLOSURE  0x08	// closure, uses outer scope variables
+#define FC_DELETED  0x10	// :delfunction used while uf_refcount > 0
+#define FC_REMOVED  0x20	// function redefined while uf_refcount > 0
+#define FC_SANDBOX  0x40	// function defined in the sandbox
 
 /* From user function to hashitem and back. */
 #define UF2HIKEY(fp) ((fp)->uf_name)
@@ -293,13 +294,11 @@ get_lambda_tv(char_u **arg, typval_T *rettv, int evaluate)
 	    fp->uf_scoped = NULL;
 
 #ifdef FEAT_PROFILE
-	fp->uf_tml_count = NULL;
-	fp->uf_tml_total = NULL;
-	fp->uf_tml_self = NULL;
-	fp->uf_profiling = FALSE;
 	if (prof_def_func())
 	    func_do_profile(fp);
 #endif
+	if (sandbox)
+	    flags |= FC_SANDBOX;
 	fp->uf_varargs = TRUE;
 	fp->uf_flags = flags;
 	fp->uf_calls = 0;
@@ -692,6 +691,7 @@ call_user_func(
     char_u	*save_sourcing_name;
     linenr_T	save_sourcing_lnum;
     scid_T	save_current_SID;
+    int		using_sandbox = FALSE;
     funccall_T	*fc;
     int		save_did_emsg;
     static int	depth = 0;
@@ -706,6 +706,7 @@ call_user_func(
 #ifdef FEAT_PROFILE
     proftime_T	wait_start;
     proftime_T	call_start;
+    int		started_profiling = FALSE;
 #endif
 
     /* If depth of calling is getting too high, don't execute the function */
@@ -857,6 +858,13 @@ call_user_func(
     save_sourcing_name = sourcing_name;
     save_sourcing_lnum = sourcing_lnum;
     sourcing_lnum = 1;
+
+    if (fp->uf_flags & FC_SANDBOX)
+    {
+	using_sandbox = TRUE;
+	++sandbox;
+    }
+
     /* need space for function name + ("function " + 3) or "[number]" */
     len = (save_sourcing_name == NULL ? 0 : STRLEN(save_sourcing_name))
 						   + STRLEN(fp->uf_name) + 20;
@@ -921,7 +929,10 @@ call_user_func(
     if (do_profiling == PROF_YES)
     {
 	if (!fp->uf_profiling && has_profiling(FALSE, fp->uf_name, NULL))
+	{
+	    started_profiling = TRUE;
 	    func_do_profile(fp);
+	}
 	if (fp->uf_profiling
 		    || (fc->caller != NULL && fc->caller->func->uf_profiling))
 	{
@@ -965,6 +976,9 @@ call_user_func(
 	    profile_add(&fc->caller->func->uf_tm_children, &call_start);
 	    profile_add(&fc->caller->func->uf_tml_children, &call_start);
 	}
+	if (started_profiling)
+	    // make a ":profdel func" stop profiling the function
+	    fp->uf_profiling = FALSE;
     }
 #endif
 
@@ -1017,6 +1031,8 @@ call_user_func(
     if (do_profiling == PROF_YES)
 	script_prof_restore(&wait_start);
 #endif
+    if (using_sandbox)
+	--sandbox;
 
     if (p_verbose >= 12 && sourcing_name != NULL)
     {
@@ -1349,8 +1365,16 @@ call_func(
     }
 
 
-    /* execute the function if no errors detected and executing */
-    if (evaluate && error == ERROR_NONE)
+    /*
+     * Execute the function if executing and no errors were detected.
+     */
+    if (!evaluate)
+    {
+	// Not evaluating, which means the return value is unknown.  This
+	// matters for giving error messages.
+	rettv->v_type = VAR_UNKNOWN;
+    }
+    else if (error == ERROR_NONE)
     {
 	char_u *rfname = fname;
 
@@ -1372,7 +1396,6 @@ call_func(
 	    else
 		fp = find_func(rfname);
 
-#ifdef FEAT_AUTOCMD
 	    /* Trigger FuncUndefined event, may load the function. */
 	    if (fp == NULL
 		    && apply_autocmds(EVENT_FUNCUNDEFINED,
@@ -1382,7 +1405,6 @@ call_func(
 		/* executed an autocommand, search for the function again */
 		fp = find_func(rfname);
 	    }
-#endif
 	    /* Try loading a package. */
 	    if (fp == NULL && script_autoload(rfname, TRUE) && !aborting())
 	    {
@@ -1594,7 +1616,7 @@ trans_function_name(
 	start += lead;
 
     /* Note that TFN_ flags use the same values as GLV_ flags. */
-    end = get_lval(start, NULL, &lv, FALSE, skip, flags,
+    end = get_lval(start, NULL, &lv, FALSE, skip, flags | GLV_READ_ONLY,
 					      lead > 2 ? 0 : FNE_CHECK_START);
     if (end == start)
     {
@@ -1886,7 +1908,7 @@ ex_function(exarg_T *eap)
      * g:func	    global function name, same as "func"
      */
     p = eap->arg;
-    name = trans_function_name(&p, eap->skip, 0, &fudi, NULL);
+    name = trans_function_name(&p, eap->skip, TFN_NO_AUTOLOAD, &fudi, NULL);
     paren = (vim_strchr(p, '(') != NULL);
     if (name == NULL && (fudi.fd_dict == NULL || !paren) && !eap->skip)
     {
@@ -2122,10 +2144,7 @@ ex_function(exarg_T *eap)
 	    /* between ":append" and "." and between ":python <<EOF" and "EOF"
 	     * don't check for ":endfunc". */
 	    if (STRCMP(theline, skip_until) == 0)
-	    {
-		vim_free(skip_until);
-		skip_until = NULL;
-	    }
+		VIM_CLEAR(skip_until);
 	}
 	else
 	{
@@ -2295,8 +2314,7 @@ ex_function(exarg_T *eap)
 		/* redefine existing function */
 		ga_clear_strings(&(fp->uf_args));
 		ga_clear_strings(&(fp->uf_lines));
-		vim_free(name);
-		name = NULL;
+		VIM_CLEAR(name);
 	    }
 	}
     }
@@ -2385,7 +2403,6 @@ ex_function(exarg_T *eap)
 		/* overwrite existing dict entry */
 		clear_tv(&fudi.fd_di->di_tv);
 	    fudi.fd_di->di_tv.v_type = VAR_FUNC;
-	    fudi.fd_di->di_tv.v_lock = 0;
 	    fudi.fd_di->di_tv.vval.v_string = vim_strsave(name);
 
 	    /* behave like "dict" was used */
@@ -2425,6 +2442,8 @@ ex_function(exarg_T *eap)
 	func_do_profile(fp);
 #endif
     fp->uf_varargs = varargs;
+    if (sandbox)
+	flags |= FC_SANDBOX;
     fp->uf_flags = flags;
     fp->uf_calls = 0;
     fp->uf_script_ID = current_SID;
@@ -2520,23 +2539,28 @@ func_do_profile(ufunc_T *fp)
 {
     int		len = fp->uf_lines.ga_len;
 
-    if (len == 0)
-	len = 1;  /* avoid getting error for allocating zero bytes */
-    fp->uf_tm_count = 0;
-    profile_zero(&fp->uf_tm_self);
-    profile_zero(&fp->uf_tm_total);
-    if (fp->uf_tml_count == NULL)
-	fp->uf_tml_count = (int *)alloc_clear((unsigned) (sizeof(int) * len));
-    if (fp->uf_tml_total == NULL)
-	fp->uf_tml_total = (proftime_T *)alloc_clear((unsigned)
-						  (sizeof(proftime_T) * len));
-    if (fp->uf_tml_self == NULL)
-	fp->uf_tml_self = (proftime_T *)alloc_clear((unsigned)
-						  (sizeof(proftime_T) * len));
-    fp->uf_tml_idx = -1;
-    if (fp->uf_tml_count == NULL || fp->uf_tml_total == NULL
-						   || fp->uf_tml_self == NULL)
-	return;	    /* out of memory */
+    if (!fp->uf_prof_initialized)
+    {
+	if (len == 0)
+	    len = 1;  /* avoid getting error for allocating zero bytes */
+	fp->uf_tm_count = 0;
+	profile_zero(&fp->uf_tm_self);
+	profile_zero(&fp->uf_tm_total);
+	if (fp->uf_tml_count == NULL)
+	    fp->uf_tml_count = (int *)alloc_clear(
+					       (unsigned)(sizeof(int) * len));
+	if (fp->uf_tml_total == NULL)
+	    fp->uf_tml_total = (proftime_T *)alloc_clear(
+					 (unsigned)(sizeof(proftime_T) * len));
+	if (fp->uf_tml_self == NULL)
+	    fp->uf_tml_self = (proftime_T *)alloc_clear(
+					 (unsigned)(sizeof(proftime_T) * len));
+	fp->uf_tml_idx = -1;
+	if (fp->uf_tml_count == NULL || fp->uf_tml_total == NULL
+						    || fp->uf_tml_self == NULL)
+	    return;	    /* out of memory */
+	fp->uf_prof_initialized = TRUE;
+    }
 
     fp->uf_profiling = TRUE;
 }
@@ -2566,7 +2590,7 @@ func_dump_profile(FILE *fd)
 	{
 	    --todo;
 	    fp = HI2UF(hi);
-	    if (fp->uf_profiling)
+	    if (fp->uf_prof_initialized)
 	    {
 		if (sorttab != NULL)
 		    sorttab[st_len++] = fp;
@@ -2972,6 +2996,9 @@ ex_return(exarg_T *eap)
     /* It's safer to return also on error. */
     else if (!eap->skip)
     {
+	/* In return statement, cause_abort should be force_abort. */
+	update_force_abort();
+
 	/*
 	 * Return unless the expression evaluation has been cancelled due to an
 	 * aborting error, an interrupt, or an exception.
@@ -3086,6 +3113,8 @@ ex_call(exarg_T *eap)
 	    failed = TRUE;
 	    break;
 	}
+	if (has_watchexpr())
+	    dbg_check_breakpoint(eap);
 
 	/* Handle a function returning a Funcref, Dictionary or List. */
 	if (handle_subscript(&arg, &rettv, !eap->skip, TRUE) == FAIL)

@@ -1,10 +1,11 @@
 #define _XOPEN_SOURCE 500  /* strdup */
 
-#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #define streq(a,b) (strcmp(a,b)==0)
+#define TRUE 1
+#define FALSE 0
 
 #include <termios.h>
 
@@ -34,7 +35,7 @@ static int getchoice(int *argip, int argc, char *argv[], const char *options[])
 typedef enum {
   OFF,
   ON,
-  QUERY
+  QUERY,
 } BoolQuery;
 
 static BoolQuery getboolq(int *argip, int argc, char *argv[])
@@ -52,6 +53,7 @@ static char *helptext[] = {
   "curblink [off|on|query]",
   "curshape [block|under|bar|query]",
   "mouse [off|click|clickdrag|motion]",
+  "reportfocus [off|on|query]",
   "altscreen [off|on|query]",
   "bracketpaste [off|on|query]",
   "icontitle [STR]",
@@ -60,13 +62,14 @@ static char *helptext[] = {
   NULL
 };
 
-static bool seticanon(bool icanon, bool echo)
+static int seticanon(int icanon, int echo)
 {
   struct termios termios;
+  int ret;
 
   tcgetattr(0, &termios);
 
-  bool ret = (termios.c_lflag & ICANON);
+  ret = (termios.c_lflag & ICANON);
 
   if(icanon) termios.c_lflag |=  ICANON;
   else       termios.c_lflag &= ~ICANON;
@@ -79,21 +82,21 @@ static bool seticanon(bool icanon, bool echo)
   return ret;
 }
 
-static void await_c1(int c1)
+static void await_c1(unsigned char c1)
 {
-  int c;
+  unsigned char c;
 
   /* await CSI - 8bit or 2byte 7bit form */
-  bool in_esc = false;
+  int in_esc = FALSE;
   while((c = getchar())) {
     if(c == c1)
       break;
     if(in_esc && c == (char)(c1 - 0x40))
       break;
     if(!in_esc && c == 0x1b)
-      in_esc = true;
+      in_esc = TRUE;
     else
-      in_esc = false;
+      in_esc = FALSE;
   }
 }
 
@@ -102,7 +105,7 @@ static char *read_csi()
   unsigned char csi[32];
   int i = 0;
 
-  await_c1(0x9B); /* CSI */
+  await_c1(0x9B); // CSI
 
   /* TODO: This really should be a more robust CSI parser
    */
@@ -113,7 +116,7 @@ static char *read_csi()
   }
   csi[++i] = 0;
 
-  /* TODO: returns longer than 32? */
+  // TODO: returns longer than 32?
 
   return strdup((char *)csi);
 }
@@ -121,22 +124,22 @@ static char *read_csi()
 static char *read_dcs()
 {
   unsigned char dcs[32];
-  bool in_esc = false;
+  int in_esc = FALSE;
   int i;
 
   await_c1(0x90);
 
   for(i = 0; i < sizeof(dcs)-1; ) {
     char c = getchar();
-    if(c == 0x9c) /* ST */
+    if(c == 0x9c) // ST
       break;
     if(in_esc && c == 0x5c)
       break;
     if(!in_esc && c == 0x1b)
-      in_esc = true;
+      in_esc = TRUE;
     else {
       dcs[i++] = c;
-      in_esc = false;
+      in_esc = FALSE;
     }
   }
   dcs[++i] = 0;
@@ -158,7 +161,7 @@ static void usage(int exitcode)
   exit(exitcode);
 }
 
-static bool query_dec_mode(int mode)
+static int query_dec_mode(int mode)
 {
   char *s = NULL;
 
@@ -189,12 +192,12 @@ static bool query_dec_mode(int mode)
     free(s);
 
     if(reply_value == 1 || reply_value == 3)
-      return true;
+      return TRUE;
     if(reply_value == 2 || reply_value == 4)
-      return false;
+      return FALSE;
 
     printf("Unrecognised reply to DECRQM: %d\n", reply_value);
-    return false;
+    return FALSE;
   } while(1);
 }
 
@@ -247,11 +250,11 @@ static int query_rqss_numeric(char *cmd)
   } while(1);
 }
 
-bool wasicanon;
+int wasicanon;
 
 void restoreicanon(void)
 {
-  seticanon(wasicanon, true);
+  seticanon(wasicanon, TRUE);
 }
 
 int main(int argc, char *argv[])
@@ -261,7 +264,7 @@ int main(int argc, char *argv[])
   if(argc == 1)
     usage(0);
 
-  wasicanon = seticanon(false, false);
+  wasicanon = seticanon(FALSE, FALSE);
   atexit(restoreicanon);
 
   while(argi < argc) {
@@ -298,12 +301,12 @@ int main(int argc, char *argv[])
       do_dec_mode(12, getboolq(&argi, argc, argv), "curblink");
     }
     else if(streq(arg, "curshape")) {
-      /* TODO: This ought to query the current value of DECSCUSR because it */
-      /*   may need blinking on or off */
+      // TODO: This ought to query the current value of DECSCUSR because it
+      //   may need blinking on or off
       const char *choices[] = {"block", "under", "bar", "query", NULL};
       int shape = getchoice(&argi, argc, argv, choices);
       switch(shape) {
-        case 3: /* query */
+        case 3: // query
           shape = query_rqss_numeric(" q");
           switch(shape) {
             case 1: case 2:
@@ -337,6 +340,9 @@ int main(int argc, char *argv[])
       case 3:
         printf("\x1b[?1003h"); break;
       }
+    }
+    else if(streq(arg, "reportfocus")) {
+      do_dec_mode(1004, getboolq(&argi, argc, argv), "reportfocus");
     }
     else if(streq(arg, "altscreen")) {
       do_dec_mode(1049, getboolq(&argi, argc, argv), "altscreen");
