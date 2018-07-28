@@ -10654,9 +10654,9 @@ eval_vars(
     int		resultlen;
     buf_T	*buf;
     int		valid = VALID_HEAD + VALID_PATH;    /* assume valid result */
-    int		tilde_file = FALSE;
     int		spec_idx;
 #ifdef FEAT_MODIFY_FNAME
+    int		tilde_file = FALSE;
     int		skip_mod = FALSE;
 #endif
     char_u	strbuf[30];
@@ -10723,7 +10723,9 @@ eval_vars(
 		else
 		{
 		    result = curbuf->b_fname;
+#ifdef FEAT_MODIFY_FNAME
 		    tilde_file = STRCMP(result, "~") == 0;
+#endif
 		}
 		break;
 
@@ -10790,7 +10792,9 @@ eval_vars(
 		    else
 		    {
 			result = buf->b_fname;
+#ifdef FEAT_MODIFY_FNAME
 			tilde_file = STRCMP(result, "~") == 0;
+#endif
 		    }
 		}
 		break;
@@ -10950,7 +10954,7 @@ arg_all(void)
 #ifndef BACKSLASH_IN_FILENAME
 			    || *p == '\\'
 #endif
-			    )
+			    || *p == '`')
 		    {
 			/* insert a backslash */
 			if (retval != NULL)
