@@ -1722,11 +1722,23 @@ ins_redraw(
     {
 	aco_save_T	aco;
 
+#ifdef FEAT_EVAL
+	// Sync undo when the autocommand calls setline() or append(), so that
+	// it can be undone separately.
+	u_sync_once = 2;
+#endif
+
 	// save and restore curwin and curbuf, in case the autocmd changes them
 	aucmd_prepbuf(&aco, curbuf);
 	apply_autocmds(EVENT_TEXTCHANGEDI, NULL, NULL, FALSE, curbuf);
 	aucmd_restbuf(&aco);
 	curbuf->b_last_changedtick = CHANGEDTICK(curbuf);
+
+#ifdef FEAT_EVAL
+	if (u_sync_once == 1)
+	    ins_need_undo = TRUE;
+	u_sync_once = 0;
+#endif
     }
 
 #ifdef FEAT_INS_EXPAND
@@ -4419,10 +4431,15 @@ ins_compl_get_exp(pos_T *ini)
 					    ? (char_u *)"." : curbuf->b_p_cpt;
 	last_match_pos = first_match_pos = *ini;
     }
+    else if (ins_buf != curbuf && !buf_valid(ins_buf))
+	ins_buf = curbuf;  // In case the buffer was wiped out.
 
     compl_old_match = compl_curr_match;	/* remember the last current match */
     pos = (compl_direction == FORWARD) ? &last_match_pos : &first_match_pos;
-    /* For ^N/^P loop over all the flags/windows/buffers in 'complete' */
+
+    /*
+     * For ^N/^P loop over all the flags/windows/buffers in 'complete'.
+     */
     for (;;)
     {
 	found_new_match = FAIL;
