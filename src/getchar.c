@@ -1710,18 +1710,18 @@ vgetc(void)
 	 * its ASCII equivalent */
 	switch (c)
 	{
-	    case K_KPLUS:		c = '+'; break;
-	    case K_KMINUS:		c = '-'; break;
-	    case K_KDIVIDE:		c = '/'; break;
+	    case K_KPLUS:	c = '+'; break;
+	    case K_KMINUS:	c = '-'; break;
+	    case K_KDIVIDE:	c = '/'; break;
 	    case K_KMULTIPLY:	c = '*'; break;
-	    case K_KENTER:		c = CAR; break;
+	    case K_KENTER:	c = CAR; break;
 	    case K_KPOINT:
 #ifdef WIN32
-				    /* Can be either '.' or a ',', *
-				     * depending on the type of keypad. */
-				    c = MapVirtualKey(VK_DECIMAL, 2); break;
+				// Can be either '.' or a ',',
+				// depending on the type of keypad.
+				c = MapVirtualKey(VK_DECIMAL, 2); break;
 #else
-				    c = '.'; break;
+				c = '.'; break;
 #endif
 	    case K_K0:		c = '0'; break;
 	    case K_K1:		c = '1'; break;
@@ -3677,7 +3677,8 @@ do_map(
 				mp->m_mode = mode;
 #ifdef FEAT_EVAL
 				mp->m_expr = expr;
-				mp->m_script_ID = current_SID;
+				mp->m_script_ctx = current_sctx;
+				mp->m_script_ctx.sc_lnum += sourcing_lnum;
 #endif
 				did_it = TRUE;
 			    }
@@ -3783,7 +3784,8 @@ do_map(
     mp->m_mode = mode;
 #ifdef FEAT_EVAL
     mp->m_expr = expr;
-    mp->m_script_ID = current_SID;
+    mp->m_script_ctx = current_sctx;
+    mp->m_script_ctx.sc_lnum += sourcing_lnum;
 #endif
 
     /* add the new entry in front of the abbrlist or maphash[] list */
@@ -4097,7 +4099,7 @@ showmap(
     }
 #ifdef FEAT_EVAL
     if (p_verbose > 0)
-	last_set_msg(mp->m_script_ID);
+	last_set_msg(mp->m_script_ctx);
 #endif
     out_flush();			/* show one line at a time */
 }

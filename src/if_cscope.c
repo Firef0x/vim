@@ -519,7 +519,7 @@ cs_add_common(
 #ifdef FEAT_MODIFY_FNAME
     len = (int)STRLEN(fname);
     fbuf = (char_u *)fname;
-    (void)modify_fname((char_u *)":p", &usedlen,
+    (void)modify_fname((char_u *)":p", FALSE, &usedlen,
 					      (char_u **)&fname, &fbuf, &len);
     if (fname == NULL)
 	goto add_err;
@@ -550,7 +550,7 @@ staterr:
     }
 
     /* if filename is a directory, append the cscope database name to it */
-    if ((statbuf.st_mode & S_IFMT) == S_IFDIR)
+    if (S_ISDIR(statbuf.st_mode))
     {
 	fname2 = (char *)alloc((unsigned)(strlen(CSCOPE_DBFILE) + strlen(fname) + 2));
 	if (fname2 == NULL)
@@ -581,12 +581,7 @@ staterr:
 
 	i = cs_insert_filelist(fname2, ppath, flags, &statbuf);
     }
-#if defined(UNIX)
     else if (S_ISREG(statbuf.st_mode) || S_ISLNK(statbuf.st_mode))
-#else
-	/* WIN32 - substitute define S_ISREG from os_unix.h */
-    else if (((statbuf.st_mode) & S_IFMT) == S_IFREG)
-#endif
     {
 	i = cs_insert_filelist(fname, ppath, flags, &statbuf);
     }

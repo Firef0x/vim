@@ -756,7 +756,7 @@ codepage_invalid:
 		     * where mblen() returns 0 for invalid character.
 		     * Therefore, following condition includes 0.
 		     */
-		    ignored = mblen(NULL, 0);	/* First reset the state. */
+		    vim_ignored = mblen(NULL, 0);  // First reset the state.
 		    if (mblen(buf, (size_t)1) <= 0)
 			n = 2;
 		    else
@@ -5019,7 +5019,7 @@ call_imactivatefunc(int active)
     argv[0].v_type = VAR_NUMBER;
     argv[0].vval.v_number = active ? 1 : 0;
     argv[1].v_type = VAR_UNKNOWN;
-    (void)call_func_retnr(p_imaf, 1, argv, FALSE);
+    (void)call_func_retnr(p_imaf, 1, argv);
 }
 
     static int
@@ -5033,7 +5033,7 @@ call_imstatusfunc(void)
     /* FIXME: :py print 'xxx' is shown duplicate result.
      * Use silent to avoid it. */
     ++msg_silent;
-    is_active = call_func_retnr(p_imsf, 0, NULL, FALSE);
+    is_active = call_func_retnr(p_imsf, 0, NULL);
     --msg_silent;
     return (is_active > 0);
 }
@@ -5145,24 +5145,22 @@ im_add_to_input(char_u *str, int len)
      static void
 im_preedit_window_set_position(void)
 {
-    int x, y, w, h, sw, sh;
+    int x, y, width, height;
+    int screen_x, screen_y, screen_width, screen_height;
 
     if (preedit_window == NULL)
 	return;
 
-    gui_gtk_get_screen_size_of_win(preedit_window, &sw, &sh);
-#if GTK_CHECK_VERSION(3,0,0)
+    gui_gtk_get_screen_geom_of_win(gui.drawarea,
+			  &screen_x, &screen_y, &screen_width, &screen_height);
     gdk_window_get_origin(gtk_widget_get_window(gui.drawarea), &x, &y);
-#else
-    gdk_window_get_origin(gui.drawarea->window, &x, &y);
-#endif
-    gtk_window_get_size(GTK_WINDOW(preedit_window), &w, &h);
+    gtk_window_get_size(GTK_WINDOW(preedit_window), &width, &height);
     x = x + FILL_X(gui.col);
     y = y + FILL_Y(gui.row);
-    if (x + w > sw)
-	x = sw - w;
-    if (y + h > sh)
-	y = sh - h;
+    if (x + width > screen_x + screen_width)
+	x = screen_x + screen_width - width;
+    if (y + height > screen_y + screen_height)
+	y = screen_y + screen_height - height;
     gtk_window_move(GTK_WINDOW(preedit_window), x, y);
 }
 
@@ -5757,11 +5755,7 @@ xim_init(void)
 #endif
 
     g_return_if_fail(gui.drawarea != NULL);
-#if GTK_CHECK_VERSION(3,0,0)
     g_return_if_fail(gtk_widget_get_window(gui.drawarea) != NULL);
-#else
-    g_return_if_fail(gui.drawarea->window != NULL);
-#endif
 
     xic = gtk_im_multicontext_new();
     g_object_ref(xic);
@@ -5775,11 +5769,7 @@ xim_init(void)
     g_signal_connect(G_OBJECT(xic), "preedit_end",
 		     G_CALLBACK(&im_preedit_end_cb), NULL);
 
-#if GTK_CHECK_VERSION(3,0,0)
     gtk_im_context_set_client_window(xic, gtk_widget_get_window(gui.drawarea));
-#else
-    gtk_im_context_set_client_window(xic, gui.drawarea->window);
-#endif
 }
 
     void
@@ -5878,17 +5868,9 @@ im_synthesize_keypress(unsigned int keyval, unsigned int state)
     GdkEventKey *event;
 
     event = (GdkEventKey *)gdk_event_new(GDK_KEY_PRESS);
-#  if GTK_CHECK_VERSION(3,0,0)
     g_object_ref(gtk_widget_get_window(gui.drawarea));
 					/* unreffed by gdk_event_free() */
-#  else
-    g_object_ref(gui.drawarea->window); /* unreffed by gdk_event_free() */
-#  endif
-#  if GTK_CHECK_VERSION(3,0,0)
     event->window = gtk_widget_get_window(gui.drawarea);
-#  else
-    event->window = gui.drawarea->window;
-#  endif
     event->send_event = TRUE;
     event->time = GDK_CURRENT_TIME;
     event->state  = state;

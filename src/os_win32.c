@@ -213,6 +213,14 @@ static void vtp_sgr_bulks(int argc, int *argv);
 static guicolor_T save_console_bg_rgb;
 static guicolor_T save_console_fg_rgb;
 
+static int g_color_index_bg = 0;
+static int g_color_index_fg = 7;
+
+# ifdef FEAT_TERMGUICOLORS
+static int default_console_color_bg = 0x000000; // black
+static int default_console_color_fg = 0xc0c0c0; // white
+# endif
+
 # ifdef FEAT_TERMGUICOLORS
 #  define USE_VTP		(vtp_working && is_term_win32() && (p_tgc || (!p_tgc && t_colors >= 256)))
 # else
@@ -1521,15 +1529,19 @@ WaitForChar(long msec, int ignore_input)
      */
     for (;;)
     {
+	// Only process messages when waiting.
+	if (msec != 0)
+	{
 #ifdef MESSAGE_QUEUE
-	parse_queued_messages();
+	    parse_queued_messages();
 #endif
 #ifdef FEAT_MZSCHEME
-	mzvim_check_threads();
+	    mzvim_check_threads();
 #endif
 #ifdef FEAT_CLIENTSERVER
-	serverProcessPendingMessages();
+	    serverProcessPendingMessages();
 #endif
+	}
 
 	if (0
 #ifdef FEAT_MOUSE
@@ -2628,6 +2640,10 @@ mch_init(void)
     if (cterm_normal_bg_color == 0)
 	cterm_normal_bg_color = ((g_attrCurrent >> 4) & 0xf) + 1;
 
+    // Fg and Bg color index nunmber at startup
+    g_color_index_fg = g_attrDefault & 0xf;
+    g_color_index_bg = (g_attrDefault >> 4) & 0xf;
+
     /* set termcap codes to current text attributes */
     update_tcap(g_attrCurrent);
 
@@ -2695,7 +2711,7 @@ mch_exit(int r)
     if (g_fWindInitCalled)
     {
 #ifdef FEAT_TITLE
-	mch_restore_title(3);
+	mch_restore_title(SAVE_RESTORE_BOTH);
 	/*
 	 * Restore both the small and big icons of the console window to
 	 * what they were at startup.  Don't do this when the window is
@@ -3108,6 +3124,9 @@ mch_dirname(
     char_u	*buf,
     int		len)
 {
+    char_u  abuf[_MAX_PATH + 1];
+    DWORD   lfnlen;
+
     /*
      * Originally this was:
      *    return (getcwd(buf, len) != NULL ? OK : FAIL);
@@ -3121,7 +3140,21 @@ mch_dirname(
 
 	if (GetCurrentDirectoryW(_MAX_PATH, wbuf) != 0)
 	{
-	    char_u  *p = utf16_to_enc(wbuf, NULL);
+	    WCHAR   wcbuf[_MAX_PATH + 1];
+	    char_u  *p = NULL;
+
+	    if (GetLongPathNameW(wbuf, wcbuf, _MAX_PATH) != 0)
+	    {
+		p = utf16_to_enc(wcbuf, NULL);
+		if (STRLEN(p) >= (size_t)len)
+		{
+		    // long path name is too long, fall back to short one
+		    vim_free(p);
+		    p = NULL;
+		}
+	    }
+	    if (p == NULL)
+		p = utf16_to_enc(wbuf, NULL);
 
 	    if (p != NULL)
 	    {
@@ -3133,7 +3166,16 @@ mch_dirname(
 	    return FAIL;
     }
 #endif
-    return (GetCurrentDirectory(len, (LPSTR)buf) != 0 ? OK : FAIL);
+    if (GetCurrentDirectory(len, (LPSTR)buf) == 0)
+	return FAIL;
+    lfnlen = GetLongPathNameA((LPCSTR)buf, (LPSTR)abuf, _MAX_PATH);
+    if (lfnlen == 0 || lfnlen >= (DWORD)len)
+	// Failed to get long path name or it's too long: fall back to the
+	// short path name.
+	return OK;
+
+    STRCPY(buf, abuf);
+    return OK;
 }
 
 /*
@@ -3967,6 +4009,48 @@ mch_get_shellsize(void)
 }
 
 /*
+ * Resize console buffer to 'COORD'
+ */
+    static void
+ResizeConBuf(
+    HANDLE  hConsole,
+    COORD   coordScreen)
+{
+    if (!SetConsoleScreenBufferSize(hConsole, coordScreen))
+    {
+#ifdef MCH_WRITE_DUMP
+	if (fdDump)
+	{
+	    fprintf(fdDump, "SetConsoleScreenBufferSize failed: %lx\n",
+		    GetLastError());
+	    fflush(fdDump);
+	}
+#endif
+    }
+}
+
+/*
+ * Resize console window size to 'srWindowRect'
+ */
+    static void
+ResizeWindow(
+    HANDLE     hConsole,
+    SMALL_RECT srWindowRect)
+{
+    if (!SetConsoleWindowInfo(hConsole, TRUE, &srWindowRect))
+    {
+#ifdef MCH_WRITE_DUMP
+	if (fdDump)
+	{
+	    fprintf(fdDump, "SetConsoleWindowInfo failed: %lx\n",
+		    GetLastError());
+	    fflush(fdDump);
+	}
+#endif
+    }
+}
+
+/*
  * Set a console window to `xSize' * `ySize'
  */
     static void
@@ -3978,6 +4062,7 @@ ResizeConBufAndWindow(
     CONSOLE_SCREEN_BUFFER_INFO csbi;	/* hold current console buffer info */
     SMALL_RECT	    srWindowRect;	/* hold the new console size */
     COORD	    coordScreen;
+    static int	    resized = FALSE;
 
 #ifdef MCH_WRITE_DUMP
     if (fdDump)
@@ -4019,32 +4104,21 @@ ResizeConBufAndWindow(
 	}
     }
 
-    if (!SetConsoleWindowInfo(g_hConOut, TRUE, &srWindowRect))
-    {
-#ifdef MCH_WRITE_DUMP
-	if (fdDump)
-	{
-	    fprintf(fdDump, "SetConsoleWindowInfo failed: %lx\n",
-		    GetLastError());
-	    fflush(fdDump);
-	}
-#endif
-    }
-
-    /* define the new console buffer size */
+    // define the new console buffer size
     coordScreen.X = xSize;
     coordScreen.Y = ySize;
 
-    if (!SetConsoleScreenBufferSize(hConsole, coordScreen))
+    // In the new console call API, only the first time in reverse order
+    if (!vtp_working || resized)
     {
-#ifdef MCH_WRITE_DUMP
-	if (fdDump)
-	{
-	    fprintf(fdDump, "SetConsoleScreenBufferSize failed: %lx\n",
-		    GetLastError());
-	    fflush(fdDump);
-	}
-#endif
+	ResizeWindow(hConsole, srWindowRect);
+	ResizeConBuf(hConsole, coordScreen);
+    }
+    else
+    {
+	ResizeConBuf(hConsole, coordScreen);
+	ResizeWindow(hConsole, srWindowRect);
+	resized = TRUE;
     }
 }
 
@@ -4322,7 +4396,8 @@ sub_process_writer(LPVOID param)
 		    && (lnum != curbuf->b_ml.ml_line_count
 			|| curbuf->b_p_eol)))
 	    {
-		WriteFile(g_hChildStd_IN_Wr, "\n", 1, (LPDWORD)&ignored, NULL);
+		WriteFile(g_hChildStd_IN_Wr, "\n", 1,
+						  (LPDWORD)&vim_ignored, NULL);
 	    }
 
 	    ++lnum;
@@ -7614,6 +7689,9 @@ vtp_init(void)
     DWORD   ver, mode;
     HMODULE hKerneldll;
     DYN_CONSOLE_SCREEN_BUFFER_INFOEX csbi;
+# ifdef FEAT_TERMGUICOLORS
+    COLORREF fg, bg;
+# endif
 
     ver = get_build_number();
     vtp_working = (ver >= VTP_FIRST_SUPPORT_BUILD) ? 1 : 0;
@@ -7640,8 +7718,17 @@ vtp_init(void)
     csbi.cbSize = sizeof(csbi);
     if (has_csbiex)
 	pGetConsoleScreenBufferInfoEx(g_hConOut, &csbi);
-    save_console_bg_rgb = (guicolor_T)csbi.ColorTable[0];
-    save_console_fg_rgb = (guicolor_T)csbi.ColorTable[7];
+    save_console_bg_rgb = (guicolor_T)csbi.ColorTable[g_color_index_bg];
+    save_console_fg_rgb = (guicolor_T)csbi.ColorTable[g_color_index_fg];
+
+# ifdef FEAT_TERMGUICOLORS
+    bg = (COLORREF)csbi.ColorTable[g_color_index_bg];
+    fg = (COLORREF)csbi.ColorTable[g_color_index_fg];
+    bg = (GetRValue(bg) << 16) | (GetGValue(bg) << 8) | GetBValue(bg);
+    fg = (GetRValue(fg) << 16) | (GetGValue(fg) << 8) | GetBValue(fg);
+    default_console_color_bg = bg;
+    default_console_color_fg = fg;
+#endif
 
     set_console_color_rgb();
 }
@@ -7738,14 +7825,16 @@ set_console_color_rgb(void)
 	ctermfg = -1;
 	if (id > 0)
 	    syn_id2cterm_bg(id, &ctermfg, &ctermbg);
-	fg = ctermfg != -1 ? ctermtoxterm(ctermfg) : 0xc0c0c0; /* white */
+	fg = ctermfg != -1 ? ctermtoxterm(ctermfg) : default_console_color_fg;
+	cterm_normal_fg_gui_color = fg;
     }
     if (bg == INVALCOLOR)
     {
 	ctermbg = -1;
 	if (id > 0)
 	    syn_id2cterm_bg(id, &ctermfg, &ctermbg);
-	bg = ctermbg != -1 ? ctermtoxterm(ctermbg) : 0x000000; /* black */
+	bg = ctermbg != -1 ? ctermtoxterm(ctermbg) : default_console_color_bg;
+	cterm_normal_bg_gui_color = bg;
     }
     fg = (GetRValue(fg) << 16) | (GetGValue(fg) << 8) | GetBValue(fg);
     bg = (GetRValue(bg) << 16) | (GetGValue(bg) << 8) | GetBValue(bg);
@@ -7757,8 +7846,8 @@ set_console_color_rgb(void)
     csbi.cbSize = sizeof(csbi);
     csbi.srWindow.Right += 1;
     csbi.srWindow.Bottom += 1;
-    csbi.ColorTable[0] = (COLORREF)bg;
-    csbi.ColorTable[7] = (COLORREF)fg;
+    csbi.ColorTable[g_color_index_bg] = (COLORREF)bg;
+    csbi.ColorTable[g_color_index_fg] = (COLORREF)fg;
     if (has_csbiex)
 	pSetConsoleScreenBufferInfoEx(g_hConOut, &csbi);
 # endif
@@ -7777,8 +7866,8 @@ reset_console_color_rgb(void)
     csbi.cbSize = sizeof(csbi);
     csbi.srWindow.Right += 1;
     csbi.srWindow.Bottom += 1;
-    csbi.ColorTable[0] = (COLORREF)save_console_bg_rgb;
-    csbi.ColorTable[7] = (COLORREF)save_console_fg_rgb;
+    csbi.ColorTable[g_color_index_bg] = (COLORREF)save_console_bg_rgb;
+    csbi.ColorTable[g_color_index_fg] = (COLORREF)save_console_fg_rgb;
     if (has_csbiex)
 	pSetConsoleScreenBufferInfoEx(g_hConOut, &csbi);
 # endif

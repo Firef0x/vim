@@ -529,6 +529,8 @@ term_start(
 
     set_string_option_direct((char_u *)"buftype", -1,
 				  (char_u *)"terminal", OPT_FREE|OPT_LOCAL, 0);
+    // Avoid that 'buftype' is reset when this buffer is entered.
+    curbuf->b_p_initialized = TRUE;
 
     /* Mark the buffer as not modifiable. It can only be made modifiable after
      * the job finished. */
@@ -2816,11 +2818,17 @@ term_after_channel_closed(term_T *term)
 	if (term->tl_finish == TL_FINISH_CLOSE)
 	{
 	    aco_save_T	aco;
+	    int		do_set_w_closing = term->tl_buffer->b_nwindows == 0;
 
-	    /* ++close or term_finish == "close" */
+	    // ++close or term_finish == "close"
 	    ch_log(NULL, "terminal job finished, closing window");
 	    aucmd_prepbuf(&aco, term->tl_buffer);
+	    // Avoid closing the window if we temporarily use it.
+	    if (do_set_w_closing)
+		curwin->w_closing = TRUE;
 	    do_bufdel(DOBUF_WIPE, (char_u *)"", 1, fnum, fnum, FALSE);
+	    if (do_set_w_closing)
+		curwin->w_closing = FALSE;
 	    aucmd_restbuf(&aco);
 	    return TRUE;
 	}
@@ -3863,6 +3871,11 @@ f_term_dumpwrite(typval_T *argvars, typval_T *rettv UNUSED)
     if (buf == NULL)
 	return;
     term = buf->b_term;
+    if (term->tl_vterm == NULL)
+    {
+	EMSG(_("E958: Job already finished"));
+	return;
+    }
 
     if (argvars[2].v_type != VAR_UNKNOWN)
     {
@@ -3931,9 +3944,9 @@ f_term_dumpwrite(typval_T *argvars, typval_T *rettv UNUSED)
 		    c = (c == NUL) ? ' ' : c;
 		    pc = (pc == NUL) ? ' ' : pc;
 		}
-		if (cell.chars[i] != prev_cell.chars[i])
+		if (c != pc)
 		    same_chars = FALSE;
-		if (cell.chars[i] == NUL || prev_cell.chars[i] == NUL)
+		if (c == NUL || pc == NUL)
 		    break;
 	    }
 	    same_attr = vtermAttr2hl(cell.attrs)

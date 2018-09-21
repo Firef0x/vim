@@ -1021,29 +1021,15 @@ call_vim_function(
     char_u      *func,
     int		argc,
     typval_T	*argv,
-    typval_T	*rettv,
-    int		safe)		/* use the sandbox */
+    typval_T	*rettv)
 {
     int		doesrange;
-    void	*save_funccalp = NULL;
     int		ret;
-
-    if (safe)
-    {
-	save_funccalp = save_funccal();
-	++sandbox;
-    }
 
     rettv->v_type = VAR_UNKNOWN;		/* clear_tv() uses this */
     ret = call_func(func, (int)STRLEN(func), rettv, argc, argv, NULL,
 		    curwin->w_cursor.lnum, curwin->w_cursor.lnum,
 		    &doesrange, TRUE, NULL, NULL);
-    if (safe)
-    {
-	--sandbox;
-	restore_funccal(save_funccalp);
-    }
-
     if (ret == FAIL)
 	clear_tv(rettv);
 
@@ -1060,13 +1046,12 @@ call_vim_function(
 call_func_retnr(
     char_u      *func,
     int		argc,
-    typval_T	*argv,
-    int		safe)		/* use the sandbox */
+    typval_T	*argv)
 {
     typval_T	rettv;
     varnumber_T	retval;
 
-    if (call_vim_function(func, argc, argv, &rettv, safe) == FAIL)
+    if (call_vim_function(func, argc, argv, &rettv) == FAIL)
 	return -1;
 
     retval = get_tv_number_chk(&rettv, NULL);
@@ -1088,13 +1073,12 @@ call_func_retnr(
 call_func_retstr(
     char_u      *func,
     int		argc,
-    typval_T	*argv,
-    int		safe)		/* use the sandbox */
+    typval_T	*argv)
 {
     typval_T	rettv;
     char_u	*retval;
 
-    if (call_vim_function(func, argc, argv, &rettv, safe) == FAIL)
+    if (call_vim_function(func, argc, argv, &rettv) == FAIL)
 	return NULL;
 
     retval = vim_strsave(get_tv_string(&rettv));
@@ -1113,12 +1097,11 @@ call_func_retstr(
 call_func_retlist(
     char_u      *func,
     int		argc,
-    typval_T	*argv,
-    int		safe)		/* use the sandbox */
+    typval_T	*argv)
 {
     typval_T	rettv;
 
-    if (call_vim_function(func, argc, argv, &rettv, safe) == FAIL)
+    if (call_vim_function(func, argc, argv, &rettv) == FAIL)
 	return NULL;
 
     if (rettv.v_type != VAR_LIST)
@@ -1512,8 +1495,8 @@ list_vim_vars(int *first)
     static void
 list_script_vars(int *first)
 {
-    if (current_SID > 0 && current_SID <= ga_scripts.ga_len)
-	list_hashtable_vars(&SCRIPT_VARS(current_SID),
+    if (current_sctx.sc_sid > 0 && current_sctx.sc_sid <= ga_scripts.ga_len)
+	list_hashtable_vars(&SCRIPT_VARS(current_sctx.sc_sid),
 						(char_u *)"s:", FALSE, first);
 }
 
@@ -7219,7 +7202,7 @@ find_var_in_ht(
 	/* Must be something like "s:", otherwise "ht" would be NULL. */
 	switch (htname)
 	{
-	    case 's': return &SCRIPT_SV(current_SID)->sv_var;
+	    case 's': return &SCRIPT_SV(current_sctx.sc_sid)->sv_var;
 	    case 'g': return &globvars_var;
 	    case 'v': return &vimvars_var;
 	    case 'b': return &curbuf->b_bufvar;
@@ -7303,8 +7286,8 @@ find_var_ht(char_u *name, char_u **varname)
     if (*name == 'l')				/* l: local function variable */
 	return get_funccal_local_ht();
     if (*name == 's'				/* script variable */
-	    && current_SID > 0 && current_SID <= ga_scripts.ga_len)
-	return &SCRIPT_VARS(current_SID);
+	    && current_sctx.sc_sid > 0 && current_sctx.sc_sid <= ga_scripts.ga_len)
+	return &SCRIPT_VARS(current_sctx.sc_sid);
     return NULL;
 }
 
@@ -8746,20 +8729,25 @@ store_session_globals(FILE *fd)
  * Should only be invoked when 'verbose' is non-zero.
  */
     void
-last_set_msg(scid_T scriptID)
+last_set_msg(sctx_T script_ctx)
 {
     char_u *p;
 
-    if (scriptID != 0)
+    if (script_ctx.sc_sid != 0)
     {
-	p = home_replace_save(NULL, get_scriptname(scriptID));
+	p = home_replace_save(NULL, get_scriptname(script_ctx.sc_sid));
 	if (p != NULL)
 	{
 	    verbose_enter();
 	    MSG_PUTS(_("\n\tLast set from "));
 	    MSG_PUTS(p);
-	    vim_free(p);
+	    if (script_ctx.sc_lnum > 0)
+	    {
+		MSG_PUTS(_(" line "));
+		msg_outnum((long)script_ctx.sc_lnum);
+	    }
 	    verbose_leave();
+	    vim_free(p);
 	}
     }
 }
@@ -9387,8 +9375,7 @@ typval_compare(
 }
 
     char_u *
-typval_tostring(arg)
-    typval_T	*arg;
+typval_tostring(typval_T *arg)
 {
     char_u	*tofree;
     char_u	numbuf[NUMBUFLEN];
@@ -9691,11 +9678,12 @@ shortpath_for_partial(
  */
     int
 modify_fname(
-    char_u	*src,		/* string with modifiers */
-    int		*usedlen,	/* characters after src that are used */
-    char_u	**fnamep,	/* file name so far */
-    char_u	**bufp,		/* buffer for allocated file name or NULL */
-    int		*fnamelen)	/* length of fnamep */
+    char_u	*src,		// string with modifiers
+    int		tilde_file,	// "~" is a file name, not $HOME
+    int		*usedlen,	// characters after src that are used
+    char_u	**fnamep,	// file name so far
+    char_u	**bufp,		// buffer for allocated file name or NULL
+    int		*fnamelen)	// length of fnamep
 {
     int		valid = 0;
     char_u	*tail;
@@ -9725,8 +9713,8 @@ repeat:
 		    || (*fnamep)[1] == '\\'
 # endif
 		    || (*fnamep)[1] == NUL)
-
 #endif
+		&& !(tilde_file && (*fnamep)[1] == NUL)
 	   )
 	{
 	    *fnamep = expand_env_save(*fnamep);

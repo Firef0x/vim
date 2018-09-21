@@ -262,9 +262,6 @@ static int fnamecmp_ino(char_u *, char_u *, long);
 #endif
 static void long_to_char(long, char_u *);
 static long char_to_long(char_u *);
-#if defined(UNIX) || defined(WIN3264)
-static char_u *make_percent_swname(char_u *dir, char_u *name);
-#endif
 #ifdef FEAT_CRYPT
 static cryptstate_T *ml_crypt_prepare(memfile_T *mfp, off_T offset, int reading);
 #endif
@@ -831,10 +828,13 @@ ml_open_file(buf_T *buf)
  */
     void
 check_need_swap(
-    int	    newfile)		/* reading file into new buffer */
+    int	    newfile)		// reading file into new buffer
 {
+    int old_msg_silent = msg_silent; // might be reset by an E325 message
+
     if (curbuf->b_may_swap && (!curbuf->b_p_ro || !newfile))
 	ml_open_file(curbuf);
+    msg_silent = old_msg_silent;
 }
 
 /*
@@ -2007,18 +2007,18 @@ recover_names(
     return file_count;
 }
 
-#if defined(UNIX) || defined(WIN3264)  /* Need _very_ long file names */
+#if defined(UNIX) || defined(WIN3264) || defined(PROTO)
 /*
+ * Need _very_ long file names.
  * Append the full path to name with path separators made into percent
  * signs, to dir. An unnamed buffer is handled as "" (<currentdir>/"")
  */
-    static char_u *
+    char_u *
 make_percent_swname(char_u *dir, char_u *name)
 {
-    char_u *d, *s, *f;
+    char_u *d = NULL, *s, *f;
 
-    f = fix_fname(name != NULL ? name : (char_u *) "");
-    d = NULL;
+    f = fix_fname(name != NULL ? name : (char_u *)"");
     if (f != NULL)
     {
 	s = alloc((unsigned)(STRLEN(f) + 1));
@@ -2039,6 +2039,56 @@ make_percent_swname(char_u *dir, char_u *name)
 
 #if (defined(UNIX) || defined(VMS)) && (defined(FEAT_GUI_DIALOG) || defined(FEAT_CON_DIALOG))
 static int process_still_running;
+#endif
+
+#if defined(FEAT_EVAL) || defined(PROTO)
+/*
+ * Return information found in swapfile "fname" in dictionary "d".
+ * This is used by the swapinfo() function.
+ */
+    void
+get_b0_dict(char_u *fname, dict_T *d)
+{
+    int fd;
+    struct block0 b0;
+
+    if ((fd = mch_open((char *)fname, O_RDONLY | O_EXTRA, 0)) >= 0)
+    {
+	if (read_eintr(fd, &b0, sizeof(b0)) == sizeof(b0))
+	{
+	    if (ml_check_b0_id(&b0) == FAIL)
+		dict_add_string(d, "error",
+			       vim_strsave((char_u *)"Not a swap file"));
+	    else if (b0_magic_wrong(&b0))
+		dict_add_string(d, "error",
+			       vim_strsave((char_u *)"Magic number mismatch"));
+	    else
+	    {
+		/* we have swap information */
+		dict_add_string(d, "version", vim_strnsave(b0.b0_version, 10));
+		dict_add_string(d, "user",
+				     vim_strnsave(b0.b0_uname, B0_UNAME_SIZE));
+		dict_add_string(d, "host",
+				     vim_strnsave(b0.b0_hname, B0_HNAME_SIZE));
+		dict_add_string(d, "fname",
+				 vim_strnsave(b0.b0_fname, B0_FNAME_SIZE_ORG));
+
+		dict_add_number(d, "pid", char_to_long(b0.b0_pid));
+		dict_add_number(d, "mtime", char_to_long(b0.b0_mtime));
+		dict_add_number(d, "dirty", b0.b0_dirty ? 1 : 0);
+# ifdef CHECK_INODE
+		dict_add_number(d, "inode", char_to_long(b0.b0_ino));
+# endif
+	    }
+	}
+	else
+	    dict_add_string(d, "error",
+				    vim_strsave((char_u *)"Cannot read file"));
+	close(fd);
+    }
+    else
+	dict_add_string(d, "error", vim_strsave((char_u *)"Cannot open file"));
+}
 #endif
 
 /*
@@ -4070,8 +4120,6 @@ attention_message(
 }
 
 #if defined(FEAT_EVAL)
-static int do_swapexists(buf_T *buf, char_u *fname);
-
 /*
  * Trigger the SwapExists autocommands.
  * Returns a value for equivalent to do_dialog() (see below):
@@ -5272,7 +5320,7 @@ ml_find_line_or_offset(buf_T *buf, linenr_T lnum, long *offp)
 	/* Don't count the last line break if 'noeol' and ('bin' or
 	 * 'nofixeol'). */
 	if ((!buf->b_p_fixeol || buf->b_p_bin) && !buf->b_p_eol
-					   && buf->b_ml.ml_line_count == lnum)
+					   && lnum > buf->b_ml.ml_line_count)
 	    size -= ffdos + 1;
     }
 

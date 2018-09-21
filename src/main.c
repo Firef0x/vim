@@ -706,6 +706,10 @@ vim_main2(void)
 	scroll_region_reset();		/* In case Rows changed */
     scroll_start();	/* may scroll the screen to the right position */
 
+#if defined(FEAT_TITLE) && (defined(UNIX) || defined(VMS) || defined(MACOS_X))
+    term_push_title(SAVE_RESTORE_BOTH);
+#endif
+
     /*
      * Don't clear the screen when starting in Ex mode, unless using the GUI.
      */
@@ -911,7 +915,7 @@ vim_main2(void)
 
     /*
      * Call the main command loop.  This never returns.
-    */
+     */
     main_loop(FALSE, FALSE);
 
 #endif /* NO_VIM_MAIN */
@@ -1155,9 +1159,15 @@ main_loop(
 	else if (do_redraw || stuff_empty())
 	{
 #ifdef FEAT_GUI
-	    /* If ui_breakcheck() was used a resize may have been postponed. */
+	    // If ui_breakcheck() was used a resize may have been postponed.
 	    gui_may_resize_shell();
 #endif
+#ifdef HAVE_DROP_FILE
+	    // If files were dropped while text was locked or the curbuf was
+	    // locked, this would be a good time to handle the drop.
+	    handle_any_postponed_drop();
+#endif
+
 	    /* Trigger CursorMoved if the cursor moved. */
 	    if (!finish_op && (
 			has_cursormoved()
@@ -1190,6 +1200,15 @@ main_loop(
 	    }
 
 #if defined(FEAT_DIFF)
+	    // Updating diffs from changed() does not always work properly,
+	    // esp. updating folds.  Do an update just before redrawing if
+	    // needed.
+	    if (curtab->tp_diff_update || curtab->tp_diff_invalid)
+	    {
+		ex_diffupdate(NULL);
+		curtab->tp_diff_update = FALSE;
+	    }
+
 	    /* Scroll-binding for diff mode may have been postponed until
 	     * here.  Avoids doing it for every change. */
 	    if (diff_need_scrollbind)
@@ -2622,7 +2641,7 @@ read_stdin(void)
      * Is there any other system that cannot do this?
      */
     close(0);
-    ignored = dup(2);
+    vim_ignored = dup(2);
 #endif
 }
 
@@ -2902,13 +2921,13 @@ exe_pre_commands(mparm_T *parmp)
 	curwin->w_cursor.lnum = 0; /* just in case.. */
 	sourcing_name = (char_u *)_("pre-vimrc command line");
 # ifdef FEAT_EVAL
-	current_SID = SID_CMDARG;
+	current_sctx.sc_sid = SID_CMDARG;
 # endif
 	for (i = 0; i < cnt; ++i)
 	    do_cmdline_cmd(cmds[i]);
 	sourcing_name = NULL;
 # ifdef FEAT_EVAL
-	current_SID = 0;
+	current_sctx.sc_sid = 0;
 # endif
 	TIME_MSG("--cmd commands");
     }
@@ -2932,7 +2951,7 @@ exe_commands(mparm_T *parmp)
 	curwin->w_cursor.lnum = 0;
     sourcing_name = (char_u *)"command line";
 #ifdef FEAT_EVAL
-    current_SID = SID_CARG;
+    current_sctx.sc_sid = SID_CARG;
 #endif
     for (i = 0; i < parmp->n_commands; ++i)
     {
@@ -2942,7 +2961,7 @@ exe_commands(mparm_T *parmp)
     }
     sourcing_name = NULL;
 #ifdef FEAT_EVAL
-    current_SID = 0;
+    current_sctx.sc_sid = 0;
 #endif
     if (curwin->w_cursor.lnum == 0)
 	curwin->w_cursor.lnum = 1;
@@ -3149,7 +3168,7 @@ process_env(
     char_u	*save_sourcing_name;
     linenr_T	save_sourcing_lnum;
 #ifdef FEAT_EVAL
-    scid_T	save_sid;
+    sctx_T	save_current_sctx;
 #endif
 
     if ((initstr = mch_getenv(env)) != NULL && *initstr != NUL)
@@ -3161,14 +3180,15 @@ process_env(
 	sourcing_name = env;
 	sourcing_lnum = 0;
 #ifdef FEAT_EVAL
-	save_sid = current_SID;
-	current_SID = SID_ENV;
+	save_current_sctx = current_sctx;
+	current_sctx.sc_sid = SID_ENV;
+	current_sctx.sc_lnum = 0;
 #endif
 	do_cmdline_cmd(initstr);
 	sourcing_name = save_sourcing_name;
 	sourcing_lnum = save_sourcing_lnum;
 #ifdef FEAT_EVAL
-	current_SID = save_sid;
+	current_sctx = save_current_sctx;
 #endif
 	return OK;
     }

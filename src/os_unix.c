@@ -18,17 +18,6 @@
  * changed beyond recognition.
  */
 
-/*
- * Some systems have a prototype for select() that has (int *) instead of
- * (fd_set *), which is wrong. This define removes that prototype. We define
- * our own prototype below.
- * Don't use it for the Mac, it causes a warning for precompiled headers.
- * TODO: use a configure check for precompiled headers?
- */
-#if !defined(__APPLE__) && !defined(__TANDEM)
-# define select select_declared_wrong
-#endif
-
 #include "vim.h"
 
 #ifdef FEAT_MZSCHEME
@@ -54,14 +43,9 @@ static int selinux_enabled = -1;
 # endif
 #endif
 
-/*
- * Use this prototype for select, some include files have a wrong prototype
- */
-#ifndef __TANDEM
+#ifdef __BEOS__
 # undef select
-# ifdef __BEOS__
-#  define select	beos_select
-# endif
+# define select	beos_select
 #endif
 
 #ifdef __CYGWIN__
@@ -75,10 +59,6 @@ static int selinux_enabled = -1;
 #   include "winclip.pro"
 #  endif
 # endif
-#endif
-
-#if defined(HAVE_SELECT)
-extern int   select(int, fd_set *, fd_set *, fd_set *, struct timeval *);
 #endif
 
 #ifdef FEAT_MOUSE_GPM
@@ -161,6 +141,7 @@ static int get_x11_title(int);
 static int get_x11_icon(int);
 
 static char_u	*oldtitle = NULL;
+static volatile sig_atomic_t oldtitle_outdated = FALSE;
 static int	did_set_title = FALSE;
 static char_u	*oldicon = NULL;
 static int	did_set_icon = FALSE;
@@ -204,7 +185,7 @@ static RETSIGTYPE catch_sigpwr SIGPROTOARG;
 # define SET_SIG_ALARM
 static RETSIGTYPE sig_alarm SIGPROTOARG;
 /* volatile because it is used in signal handler sig_alarm(). */
-static volatile int sig_alarm_called;
+static volatile sig_atomic_t sig_alarm_called;
 #endif
 static RETSIGTYPE deathtrap SIGPROTOARG;
 
@@ -230,13 +211,13 @@ static int save_patterns(int num_pat, char_u **pat, int *num_file, char_u ***fil
 #endif
 
 /* volatile because it is used in signal handler sig_winch(). */
-static volatile int do_resize = FALSE;
+static volatile sig_atomic_t do_resize = FALSE;
 static char_u	*extra_shell_arg = NULL;
 static int	show_shell_mess = TRUE;
 /* volatile because it is used in signal handler deathtrap(). */
-static volatile int deadly_signal = 0;	    /* The signal we caught */
+static volatile sig_atomic_t deadly_signal = 0;	   /* The signal we caught */
 /* volatile because it is used in signal handler deathtrap(). */
-static volatile int in_mch_delay = FALSE;    /* sleeping in mch_delay() */
+static volatile sig_atomic_t in_mch_delay = FALSE; /* sleeping in mch_delay() */
 
 #if defined(FEAT_JOB_CHANNEL) && !defined(USE_SYSTEM)
 static int dont_check_job_ended = 0;
@@ -376,7 +357,7 @@ mch_chdir(char *path)
     void
 mch_write(char_u *s, int len)
 {
-    ignored = (int)write(1, (char *)s, len);
+    vim_ignored = (int)write(1, (char *)s, len);
     if (p_wd)		/* Unix is too fast, slow down a bit more */
 	RealWaitForChar(read_cmd_fd, p_wd, NULL, NULL);
 }
@@ -416,10 +397,14 @@ mch_inchar(
 	    handle_resize();
 
 #ifdef MESSAGE_QUEUE
-	parse_queued_messages();
-	/* If input was put directly in typeahead buffer bail out here. */
-	if (typebuf_changed(tb_change_cnt))
-	    return 0;
+	// Only process messages when waiting.
+	if (wtime != 0)
+	{
+	    parse_queued_messages();
+	    // If input was put directly in typeahead buffer bail out here.
+	    if (typebuf_changed(tb_change_cnt))
+		return 0;
+	}
 #endif
 	if (wtime < 0 && did_start_blocking)
 	    /* blocking and already waited for p_ut */
@@ -1227,18 +1212,39 @@ deathtrap SIGDEFARG(sigarg)
     SIGRETURN;
 }
 
-#if defined(_REENTRANT) && defined(SIGCONT)
 /*
- * On Solaris with multi-threading, suspending might not work immediately.
- * Catch the SIGCONT signal, which will be used as an indication whether the
- * suspending has been done or not.
+ * Invoked after receiving SIGCONT.  We don't know what happened while
+ * sleeping, deal with part of that.
+ */
+    static void
+after_sigcont(void)
+{
+# ifdef FEAT_TITLE
+    // Don't change "oldtitle" in a signal handler, set a flag to obtain it
+    // again later.
+    oldtitle_outdated = TRUE;
+# endif
+    settmode(TMODE_RAW);
+    need_check_timestamps = TRUE;
+    did_check_timestamps = FALSE;
+}
+
+#if defined(SIGCONT)
+static RETSIGTYPE sigcont_handler SIGPROTOARG;
+static volatile sig_atomic_t in_mch_suspend = FALSE;
+
+/*
+ * With multi-threading, suspending might not work immediately.  Catch the
+ * SIGCONT signal, which will be used as an indication whether the suspending
+ * has been done or not.
  *
  * On Linux, signal is not always handled immediately either.
  * See https://bugs.launchpad.net/bugs/291373
+ * Probably because the signal is handled in another thread.
  *
  * volatile because it is used in signal handler sigcont_handler().
  */
-static volatile int sigcont_received;
+static volatile sig_atomic_t sigcont_received;
 static RETSIGTYPE sigcont_handler SIGPROTOARG;
 
 /*
@@ -1247,7 +1253,22 @@ static RETSIGTYPE sigcont_handler SIGPROTOARG;
     static RETSIGTYPE
 sigcont_handler SIGDEFARG(sigarg)
 {
-    sigcont_received = TRUE;
+    if (in_mch_suspend)
+    {
+	sigcont_received = TRUE;
+    }
+    else
+    {
+	// We didn't suspend ourselves, assume we were stopped by a SIGSTOP
+	// signal (which can't be intercepted) and get a SIGCONT.  Need to get
+	// back to a sane mode. We should redraw, but we can't really do that
+	// in a signal handler, do a redraw later.
+	after_sigcont();
+	redraw_later(CLEAR);
+	cursor_on_force();
+	out_flush();
+    }
+
     SIGRETURN;
 }
 #endif
@@ -1330,6 +1351,8 @@ mch_suspend(void)
 {
     /* BeOS does have SIGTSTP, but it doesn't work. */
 #if defined(SIGTSTP) && !defined(__BEOS__)
+    in_mch_suspend = TRUE;
+
     out_flush();	    /* needed to make cursor visible on some systems */
     settmode(TMODE_COOK);
     out_flush();	    /* needed to disable mouse on some systems */
@@ -1337,40 +1360,32 @@ mch_suspend(void)
 # if defined(FEAT_CLIPBOARD) && defined(FEAT_X11)
     loose_clipboard();
 # endif
-
-# if defined(_REENTRANT) && defined(SIGCONT)
+# if defined(SIGCONT)
     sigcont_received = FALSE;
 # endif
+
     kill(0, SIGTSTP);	    /* send ourselves a STOP signal */
-# if defined(_REENTRANT) && defined(SIGCONT)
+
+# if defined(SIGCONT)
     /*
      * Wait for the SIGCONT signal to be handled. It generally happens
-     * immediately, but somehow not all the time. Do not call pause()
-     * because there would be race condition which would hang Vim if
-     * signal happened in between the test of sigcont_received and the
-     * call to pause(). If signal is not yet received, call sleep(0)
-     * to just yield CPU. Signal should then be received. If somehow
-     * it's still not received, sleep 1, 2, 3 ms. Don't bother waiting
-     * further if signal is not received after 1+2+3+4 ms (not expected
-     * to happen).
+     * immediately, but somehow not all the time, probably because it's handled
+     * in another thread. Do not call pause() because there would be race
+     * condition which would hang Vim if signal happened in between the test of
+     * sigcont_received and the call to pause(). If signal is not yet received,
+     * sleep 0, 1, 2, 3 ms. Don't bother waiting further if signal is not
+     * received after 1+2+3 ms (not expected to happen).
      */
     {
 	long wait_time;
+
 	for (wait_time = 0; !sigcont_received && wait_time <= 3L; wait_time++)
-	    /* Loop is not entered most of the time */
 	    mch_delay(wait_time, FALSE);
     }
 # endif
+    in_mch_suspend = FALSE;
 
-# ifdef FEAT_TITLE
-    /*
-     * Set oldtitle to NULL, so the current title is obtained again.
-     */
-    VIM_CLEAR(oldtitle);
-# endif
-    settmode(TMODE_RAW);
-    need_check_timestamps = TRUE;
-    did_check_timestamps = FALSE;
+    after_sigcont();
 #else
     suspend_shell();
 #endif
@@ -1410,7 +1425,7 @@ set_signals(void)
 #ifdef SIGTSTP
     signal(SIGTSTP, restricted ? SIG_IGN : SIG_DFL);
 #endif
-#if defined(_REENTRANT) && defined(SIGCONT)
+#if defined(SIGCONT)
     signal(SIGCONT, sigcont_handler);
 #endif
 
@@ -1469,7 +1484,7 @@ catch_int_signal(void)
 reset_signals(void)
 {
     catch_signals(SIG_DFL, SIG_DFL);
-#if defined(_REENTRANT) && defined(SIGCONT)
+#if defined(SIGCONT)
     /* SIGCONT isn't in the list, because its default action is ignore */
     signal(SIGCONT, SIG_DFL);
 #endif
@@ -1532,7 +1547,7 @@ block_signals(sigset_t *set)
     for (i = 0; signal_info[i].sig != -1; i++)
 	sigaddset(&newset, signal_info[i].sig);
 
-# if defined(_REENTRANT) && defined(SIGCONT)
+# if defined(SIGCONT)
     /* SIGCONT isn't in the list, because its default action is ignore */
     sigaddset(&newset, SIGCONT);
 # endif
@@ -2239,6 +2254,11 @@ mch_settitle(char_u *title, char_u *icon)
      */
     if ((type || *T_TS != NUL) && title != NULL)
     {
+	if (oldtitle_outdated)
+	{
+	    oldtitle_outdated = FALSE;
+	    VIM_CLEAR(oldtitle);
+	}
 	if (oldtitle == NULL
 #ifdef FEAT_GUI
 		&& !gui.in_use
@@ -2294,17 +2314,21 @@ mch_settitle(char_u *title, char_u *icon)
 /*
  * Restore the window/icon title.
  * "which" is one of:
- *  1  only restore title
- *  2  only restore icon
- *  3  restore title and icon
+ *  SAVE_RESTORE_TITLE only restore title
+ *  SAVE_RESTORE_ICON  only restore icon
+ *  SAVE_RESTORE_BOTH  restore title and icon
  */
     void
 mch_restore_title(int which)
 {
     /* only restore the title or icon when it has been set */
-    mch_settitle(((which & 1) && did_set_title) ?
+    mch_settitle(((which & SAVE_RESTORE_TITLE) && did_set_title) ?
 			(oldtitle ? oldtitle : p_titleold) : NULL,
-			      ((which & 2) && did_set_icon) ? oldicon : NULL);
+	       ((which & SAVE_RESTORE_ICON) && did_set_icon) ? oldicon : NULL);
+
+    // pop and push from/to the stack
+    term_pop_title(which);
+    term_push_title(which);
 }
 
 #endif /* FEAT_TITLE */
@@ -3092,11 +3116,7 @@ mch_isdir(char_u *name)
 	return FALSE;
     if (stat((char *)name, &statb))
 	return FALSE;
-#ifdef _POSIX_SOURCE
     return (S_ISDIR(statb.st_mode) ? TRUE : FALSE);
-#else
-    return ((statb.st_mode & S_IFMT) == S_IFDIR ? TRUE : FALSE);
-#endif
 }
 
 /*
@@ -3113,11 +3133,7 @@ mch_isrealdir(char_u *name)
 	return FALSE;
     if (mch_lstat((char *)name, &statb))
 	return FALSE;
-#ifdef _POSIX_SOURCE
     return (S_ISDIR(statb.st_mode) ? TRUE : FALSE);
-#else
-    return ((statb.st_mode & S_IFMT) == S_IFDIR ? TRUE : FALSE);
-#endif
 }
 
 static int executable_file(char_u *name);
@@ -3370,7 +3386,9 @@ mch_exit(int r)
     {
 	settmode(TMODE_COOK);
 #ifdef FEAT_TITLE
-	mch_restore_title(3);	/* restore xterm title and icon name */
+	// restore xterm title and icon name
+	mch_restore_title(SAVE_RESTORE_BOTH);
+	term_pop_title(SAVE_RESTORE_BOTH);
 #endif
 	/*
 	 * When t_ti is not empty but it doesn't cause swapping terminal
@@ -3629,6 +3647,13 @@ mch_setmouse(int on)
     static int	bevalterm_ison = FALSE;
 # endif
     int		xterm_mouse_vers;
+
+# if defined(FEAT_X11) && defined(FEAT_XCLIPBOARD)
+    if (!on)
+	// Make sure not tracing mouse movements.  Important when a button-down
+	// was received but no release yet.
+	stop_xterm_trace();
+# endif
 
     if (on == mouse_ison
 # ifdef FEAT_BEVAL_TERM
@@ -4668,9 +4693,9 @@ mch_call_shell_fork(
 		 */
 		if (fd >= 0)
 		{
-		    ignored = dup(fd); /* To replace stdin  (fd 0) */
-		    ignored = dup(fd); /* To replace stdout (fd 1) */
-		    ignored = dup(fd); /* To replace stderr (fd 2) */
+		    vim_ignored = dup(fd); /* To replace stdin  (fd 0) */
+		    vim_ignored = dup(fd); /* To replace stdout (fd 1) */
+		    vim_ignored = dup(fd); /* To replace stderr (fd 2) */
 
 		    /* Don't need this now that we've duplicated it */
 		    close(fd);
@@ -4727,13 +4752,13 @@ mch_call_shell_fork(
 
 		    /* set up stdin/stdout/stderr for the child */
 		    close(0);
-		    ignored = dup(pty_slave_fd);
+		    vim_ignored = dup(pty_slave_fd);
 		    close(1);
-		    ignored = dup(pty_slave_fd);
+		    vim_ignored = dup(pty_slave_fd);
 		    if (gui.in_use)
 		    {
 			close(2);
-			ignored = dup(pty_slave_fd);
+			vim_ignored = dup(pty_slave_fd);
 		    }
 
 		    close(pty_slave_fd);    /* has been dupped, close it now */
@@ -4744,13 +4769,13 @@ mch_call_shell_fork(
 		    /* set up stdin for the child */
 		    close(fd_toshell[1]);
 		    close(0);
-		    ignored = dup(fd_toshell[0]);
+		    vim_ignored = dup(fd_toshell[0]);
 		    close(fd_toshell[0]);
 
 		    /* set up stdout for the child */
 		    close(fd_fromshell[0]);
 		    close(1);
-		    ignored = dup(fd_fromshell[1]);
+		    vim_ignored = dup(fd_fromshell[1]);
 		    close(fd_fromshell[1]);
 
 # ifdef FEAT_GUI
@@ -4758,7 +4783,7 @@ mch_call_shell_fork(
 		    {
 			/* set up stderr for the child */
 			close(2);
-			ignored = dup(1);
+			vim_ignored = dup(1);
 		    }
 # endif
 		}
@@ -4895,7 +4920,7 @@ mch_call_shell_fork(
 					    && (lnum !=
 						    curbuf->b_ml.ml_line_count
 						    || curbuf->b_p_eol)))
-				    ignored = write(toshell_fd, "\n",
+				    vim_ignored = write(toshell_fd, "\n",
 								   (size_t)1);
 				++lnum;
 				if (lnum > curbuf->b_op_end.lnum)
@@ -5586,34 +5611,34 @@ mch_job_start(char **argv, job_T *job, jobopt_T *options, int is_terminal)
 	/* set up stdin for the child */
 	close(0);
 	if (use_null_for_in && null_fd >= 0)
-	    ignored = dup(null_fd);
+	    vim_ignored = dup(null_fd);
 	else if (fd_in[0] < 0)
-	    ignored = dup(pty_slave_fd);
+	    vim_ignored = dup(pty_slave_fd);
 	else
-	    ignored = dup(fd_in[0]);
+	    vim_ignored = dup(fd_in[0]);
 
 	/* set up stderr for the child */
 	close(2);
 	if (use_null_for_err && null_fd >= 0)
 	{
-	    ignored = dup(null_fd);
+	    vim_ignored = dup(null_fd);
 	    stderr_works = FALSE;
 	}
 	else if (use_out_for_err)
-	    ignored = dup(fd_out[1]);
+	    vim_ignored = dup(fd_out[1]);
 	else if (fd_err[1] < 0)
-	    ignored = dup(pty_slave_fd);
+	    vim_ignored = dup(pty_slave_fd);
 	else
-	    ignored = dup(fd_err[1]);
+	    vim_ignored = dup(fd_err[1]);
 
 	/* set up stdout for the child */
 	close(1);
 	if (use_null_for_out && null_fd >= 0)
-	    ignored = dup(null_fd);
+	    vim_ignored = dup(null_fd);
 	else if (fd_out[1] < 0)
-	    ignored = dup(pty_slave_fd);
+	    vim_ignored = dup(pty_slave_fd);
 	else
-	    ignored = dup(fd_out[1]);
+	    vim_ignored = dup(fd_out[1]);
 
 	if (fd_in[0] >= 0)
 	    close(fd_in[0]);
@@ -6271,7 +6296,8 @@ select_eintr:
 	if (interrupted != NULL)
 	    *interrupted = FALSE;
 
-	ret = select(maxfd + 1, &rfds, &wfds, &efds, tvp);
+	ret = select(maxfd + 1, SELECT_TYPE_ARG234 &rfds,
+		      SELECT_TYPE_ARG234 &wfds, SELECT_TYPE_ARG234 &efds, tvp);
 	result = ret > 0 && FD_ISSET(fd, &rfds);
 	if (result)
 	    --ret;

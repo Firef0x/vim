@@ -954,6 +954,13 @@ These three can be repeated and mixed.  Examples:
 
 expr8							*expr8*
 -----
+This expression is either |expr9| or a sequence of the alternatives below,
+in any order.  E.g., these are all possible:
+	expr9[expr1].name
+	expr9.name[expr1]
+	expr9(expr1, ...)[expr1].name
+
+
 expr8[expr1]		item of String or |List|	*expr-[]* *E111*
 							*E909* *subscript*
 If expr8 is a Number or String this results in a String that contains the
@@ -2111,7 +2118,7 @@ cursor({list})			Number	move cursor to position in {list}
 debugbreak({pid})		Number  interrupt process being debugged
 deepcopy({expr} [, {noref}])	any	make a full copy of {expr}
 delete({fname} [, {flags}])	Number	delete the file or directory {fname}
-deletebufline({expr}, {first}[, {last}])
+deletebufline({expr}, {first} [, {last}])
 				Number	delete lines from buffer {expr}
 did_filetype()			Number	|TRUE| if FileType autocmd event used
 diff_filler({lnum})		Number	diff filler lines about {lnum}
@@ -2196,7 +2203,7 @@ gettabvar({nr}, {varname} [, {def}])
 				any	variable {varname} in tab {nr} or {def}
 gettabwinvar({tabnr}, {winnr}, {name} [, {def}])
 				any	{name} in {winnr} in tab page {tabnr}
-getwininfo([{winid}])		List	list of windows
+getwininfo([{winid}])		List	list of info about each window
 getwinpos([{timeout}])		List	X and Y coord in pixels of the Vim window
 getwinposx()			Number	X coord in pixels of the Vim window
 getwinposy()			Number	Y coord in pixels of the Vim window
@@ -2409,6 +2416,8 @@ submatch({nr} [, {list}])	String or List
 					specific match in ":s" or substitute()
 substitute({expr}, {pat}, {sub}, {flags})
 				String	all {pat} in {expr} replaced with {sub}
+swapinfo({fname})		Dict	information about swap file {fname}
+swapname({expr})		String	swap file of buffer {expr}
 synID({lnum}, {col}, {trans})	Number	syntax ID at {lnum} and {col}
 synIDattr({synID}, {what} [, {mode}])
 				String	attribute {what} of syntax ID {synID}
@@ -2465,7 +2474,10 @@ test_null_job()			Job	null value for testing
 test_null_list()		List	null value for testing
 test_null_partial()		Funcref	null value for testing
 test_null_string()		String	null value for testing
+test_option_not_set({name})    none	reset flag indicating option was set
 test_override({expr}, {val})    none	test with Vim internal overrides
+test_scrollbar({which}, {value}, {dragging})
+				none	scroll in the GUI for testing
 test_settime({expr})		none	set current time for testing
 timer_info([{id}])		List	information about timers
 timer_pause({id}, {pause})	none	pause or unpause a timer
@@ -2477,7 +2489,7 @@ tolower({expr})			String	the String {expr} switched to lowercase
 toupper({expr})			String	the String {expr} switched to uppercase
 tr({src}, {fromstr}, {tostr})	String	translate chars of {src} in {fromstr}
 					to chars in {tostr}
-trim({text}[, {mask}])		String	trim characters in {mask} from {text}
+trim({text} [, {mask}])		String	trim characters in {mask} from {text}
 trunc({expr})			Float	truncate Float {expr}
 type({name})			Number	type of variable {name}
 undofile({name})		String	undo file name for {name}
@@ -2497,6 +2509,7 @@ win_screenpos({nr})		List	get screen position of window {nr}
 winbufnr({nr})			Number	buffer number of window {nr}
 wincol()			Number	window column of the cursor
 winheight({nr})			Number	height of window {nr}
+winlayout([{tabnr}])		List	layout of windows in tab {tabnr}
 winline()			Number	window line of the cursor
 winnr([{expr}])			Number	number of current window
 winrestcmd()			String	returns command to restore window sizes
@@ -3529,7 +3542,7 @@ delete({fname} [, {flags}])					*delete()*
 		To delete a line from the buffer use |:delete| or
 		|deletebufline()|.
 
-deletebufline({expr}, {first}[, {last}])		*deletebufline()*
+deletebufline({expr}, {first} [, {last}])		*deletebufline()*
 		Delete lines {first} to {last} (inclusive) from buffer {expr}.
 		If {last} is omitted then delete line {first} only.
 		On success 0 is returned, on failure 1 is returned.
@@ -3789,7 +3802,10 @@ expand({expr} [, {nosuf} [, {list}]])				*expand()*
 			<abuf>		autocmd buffer number (as a String!)
 			<amatch>	autocmd matched name
 			<sfile>		sourced script file or function name
-			<slnum>		sourced script file line number
+			<slnum>		sourced script line number or function
+					line number
+			<sflnum>	script file line number, also when in
+					a function
 			<cword>		word under the cursor
 			<cWORD>		WORD under the cursor
 			<client>	the {clientid} of the last received
@@ -4307,7 +4323,7 @@ getbufinfo([{dict}])
 			endfor
 <
 		To get buffer-local options use: >
-			getbufvar({bufnr}, '&')
+			getbufvar({bufnr}, '&option_name')
 
 <
 							*getbufline()*
@@ -4720,6 +4736,10 @@ getloclist({nr} [, {what}])				*getloclist()*
 		If the optional {what} dictionary argument is supplied, then
 		returns the items listed in {what} as a dictionary. Refer to
 		|getqflist()| for the supported items in {what}.
+		If {what} contains 'filewinid', then returns the id of the
+		window used to display files from the location list. This
+		field is applicable only when called from a location list
+		window.
 
 getmatches()						*getmatches()*
 		Returns a |List| with all matches previously defined by
@@ -4936,6 +4956,41 @@ gettabwinvar({tabnr}, {winnr}, {varname} [, {def}])		*gettabwinvar()*
 			:let list_is_on = gettabwinvar(1, 2, '&list')
 			:echo "myvar = " . gettabwinvar(3, 1, 'myvar')
 <
+		To obtain all window-local variables use: >
+			gettabwinvar({tabnr}, {winnr}, '&')
+
+getwininfo([{winid}])					*getwininfo()*
+		Returns information about windows as a List with Dictionaries.
+
+		If {winid} is given Information about the window with that ID
+		is returned.  If the window does not exist the result is an
+		empty list.
+
+		Without {winid} information about all the windows in all the
+		tab pages is returned.
+
+		Each List item is a Dictionary with the following entries:
+			bufnr		number of buffer in the window
+			height		window height (excluding winbar)
+			loclist		1 if showing a location list
+					{only with the +quickfix feature}
+			quickfix	1 if quickfix or location list window
+					{only with the +quickfix feature}
+			terminal	1 if a terminal window
+					{only with the +terminal feature}
+			tabnr		tab page number
+			variables	a reference to the dictionary with
+					window-local variables
+			width		window width
+			winbar		1 if the window has a toolbar, 0
+					otherwise
+			wincol		leftmost screen column of the window,
+					col from |win_screenpos()|
+			winid		|window-ID|
+			winnr		window number
+			winrow		topmost screen column of the window,
+					row from |win_screenpos()|
+
 getwinpos([{timeout}])					*getwinpos()*
 		The result is a list with two numbers, the result of
 		getwinposx() and getwinposy() combined: 
@@ -4968,39 +5023,6 @@ getwinposy()	The result is a Number, which is the Y coordinate in pixels of
 		a timeout of 100 msec).
 		The result will be -1 if the information is not available.
 		The value can be used with `:winpos`.
-
-getwininfo([{winid}])					*getwininfo()*
-		Returns information about windows as a List with Dictionaries.
-
-		If {winid} is given Information about the window with that ID
-		is returned.  If the window does not exist the result is an
-		empty list.
-
-		Without {winid} information about all the windows in all the
-		tab pages is returned.
-
-		Each List item is a Dictionary with the following entries:
-			bufnr		number of buffer in the window
-			height		window height (excluding winbar)
-			winbar		1 if the window has a toolbar, 0
-					otherwise
-			loclist		1 if showing a location list
-					{only with the +quickfix feature}
-			quickfix	1 if quickfix or location list window
-					{only with the +quickfix feature}
-			terminal	1 if a terminal window
-					{only with the +terminal feature}
-			tabnr		tab page number
-			variables	a reference to the dictionary with
-					window-local variables
-			width		window width
-			wincol		leftmost screen column of the window
-			winid		|window-ID|
-			winnr		window number
-			winrow		topmost screen column of the window
-
-		To obtain all window-local variables use: >
-			gettabwinvar({tabnr}, {winnr}, '&')
 
 getwinvar({winnr}, {varname} [, {def}])				*getwinvar()*
 		Like |gettabwinvar()| for the current tabpage.
@@ -5916,6 +5938,7 @@ maparg({name} [, {mode} [, {abbr} [, {dict}]]])			*maparg()*
 				     (|mapmode-ic|)
 		  "sid"	     The script local ID, used for <sid> mappings
 			     (|<SID>|).
+		  "lnum"     The line number in "sid", zero if unknown.
 		  "nowait"   Do not wait for other, longer mappings.
 			     (|:map-<nowait>|).
 
@@ -5963,11 +5986,14 @@ match({expr}, {pat} [, {start} [, {count}]])			*match()*
 		When {expr} is a |List| then this returns the index of the
 		first item where {pat} matches.  Each item is used as a
 		String, |Lists| and |Dictionaries| are used as echoed.
+
 		Otherwise, {expr} is used as a String.  The result is a
 		Number, which gives the index (byte offset) in {expr} where
 		{pat} matches.
+
 		A match at the first character or |List| item returns zero.
 		If there is no match -1 is returned.
+
 		For getting submatches see |matchlist()|.
 		Example: >
 			:echo match("testing", "ing")	" results in 4
@@ -6014,7 +6040,7 @@ match({expr}, {pat} [, {start} [, {count}]])			*match()*
 		the pattern.  'smartcase' is NOT used.  The matching is always
 		done like 'magic' is set and 'cpoptions' is empty.
 
-					*matchadd()* *E798* *E799* *E801*
+				*matchadd()* *E798* *E799* *E801* *E957*
 matchadd({group}, {pattern} [, {priority} [, {id} [, {dict}]]])
 		Defines a pattern to be highlighted in the current window (a
 		"match").  It will be highlighted with {group}.  Returns an
@@ -6053,6 +6079,8 @@ matchadd({group}, {pattern} [, {priority} [, {id} [, {dict}]]])
 			conceal	    Special character to show instead of the
 				    match (only for |hl-Conceal| highlighted
 				    matches, see |:syn-cchar|)
+			window	    Instead of the current window use the
+				    window with this number or window ID.
 
 		The number of matches is not limited, as it is the case with
 		the |:match| commands.
@@ -6220,32 +6248,38 @@ mode([expr])	Return a string that indicates the current mode.
 		a non-empty String (|non-zero-arg|), then the full mode is
 		returned, otherwise only the first letter is returned.
 
-			n	Normal, Terminal-Normal
-			no	Operator-pending
-			v	Visual by character
-			V	Visual by line
-			CTRL-V	Visual blockwise
-			s	Select by character
-			S	Select by line
-			CTRL-S	Select blockwise
-			i	Insert
-			ic	Insert mode completion |compl-generic|
-			ix	Insert mode |i_CTRL-X| completion
-			R	Replace |R|
-			Rc	Replace mode completion |compl-generic|
-			Rv	Virtual Replace |gR|
-			Rx	Replace mode |i_CTRL-X| completion
-			c	Command-line editing
-			cv	Vim Ex mode |gQ|
-			ce	Normal Ex mode |Q|
-			r	Hit-enter prompt
-			rm	The -- more -- prompt
-			r?	A |:confirm| query of some sort
-			!	Shell or external command is executing
-			t	Terminal-Job mode: keys go to the job
+		   n	    Normal, Terminal-Normal
+		   no	    Operator-pending
+		   niI	    Normal using |i_CTRL-O| in |Insert-mode|
+		   niR	    Normal using |i_CTRL-O| in |Replace-mode|
+		   niV	    Normal using |i_CTRL-O| in |Virtual-Replace-mode|
+		   v	    Visual by character
+		   V	    Visual by line
+		   CTRL-V   Visual blockwise
+		   s	    Select by character
+		   S	    Select by line
+		   CTRL-S   Select blockwise
+		   i	    Insert
+		   ic	    Insert mode completion |compl-generic|
+		   ix	    Insert mode |i_CTRL-X| completion
+		   R	    Replace |R|
+		   Rc	    Replace mode completion |compl-generic|
+		   Rv	    Virtual Replace |gR|
+		   Rx	    Replace mode |i_CTRL-X| completion
+		   c	    Command-line editing
+		   cv	    Vim Ex mode |gQ|
+		   ce	    Normal Ex mode |Q|
+		   r	    Hit-enter prompt
+		   rm	    The -- more -- prompt
+		   r?	    A |:confirm| query of some sort
+		   !	    Shell or external command is executing
+		   t	    Terminal-Job mode: keys go to the job
 		This is useful in the 'statusline' option or when used
 		with |remote_expr()| In most other places it always returns
 		"c" or "n".
+		Note that in the future more modes and more specific modes may
+		be added. It's better not to compare the whole string but only
+		the leading character(s).
 		Also see |visualmode()|.
 
 mzeval({expr})							*mzeval()*
@@ -7990,6 +8024,32 @@ substitute({expr}, {pat}, {sub}, {flags})		*substitute()*
 		|submatch()| returns.  Example: >
 		   :echo substitute(s, '%\(\x\x\)', {m -> '0x' . m[1]}, 'g')
 
+swapinfo({fname})					*swapinfo()*
+		The result is a dictionary, which holds information about the
+		swapfile {fname}. The available fields are:
+			version VIM version
+			user	user name
+			host	host name
+			fname	original file name
+			pid	PID of the VIM process that created the swap
+				file
+			mtime	last modification time in seconds
+			inode	Optional: INODE number of the file
+			dirty	1 if file was modified, 0 if not
+		Note that "user" and "host" are truncated to at most 39 bytes.
+		In case of failure an "error" item is added with the reason:
+			Cannot open file: file not found or in accessible
+			Cannot read file: cannot read first block
+			Not a swap file: does not contain correct block ID
+			Magic number mismatch: Info in first block is invalid
+
+swapname({expr})					*swapname()*
+		The result is the swap file path of the buffer {expr}.
+		For the use of {expr}, see |bufname()| above.
+		If buffer {expr} is the current buffer, the result is equal to
+		|:swapname| (unless no swap file).
+		If buffer {expr} has no swap file, returns an empty string.
+
 synID({lnum}, {col}, {trans})				*synID()*
 		The result is a Number, which is the syntax ID at the position
 		{lnum} and {col} in the current window.
@@ -8344,7 +8404,9 @@ term_dumpwrite({buf}, {filename} [, {options}])
 		Dump the contents of the terminal screen of {buf} in the file
 		{filename}.  This uses a format that can be used with
 		|term_dumpload()| and |term_dumpdiff()|.
-		If {filename} already exists an error is given.	*E953*
+		If the job in the terminal already finished an error is given:
+		*E958*
+		If {filename} already exists an error is given:	*E953*
 		Also see |terminal-diff|.
 
 		{options} is a dictionary with these optional entries:
@@ -8581,9 +8643,8 @@ term_start({cmd}, {options})				*term_start()*
 		|job-options|.  However, not all options can be used.  These
 		are supported:
 		   all timeout options
-		   "stoponexit"
-		   "callback", "out_cb", "err_cb"
-		   "exit_cb", "close_cb"
+		   "stoponexit", "cwd", "env"
+		   "callback", "out_cb", "err_cb", "exit_cb", "close_cb"
 		   "in_io", "in_top", "in_bot", "in_name", "in_buf"
 		   "out_io", "out_name", "out_buf", "out_modifiable", "out_msg"
 		   "err_io", "err_name", "err_buf", "err_modifiable", "err_msg"
@@ -8687,6 +8748,15 @@ test_null_partial()					*test_null_partial()*
 test_null_string()					*test_null_string()*
 		Return a String that is null. Only useful for testing.
 
+test_option_not_set({name})				*test_option_not_set()*
+		Reset the flag that indicates option {name} was set.  Thus it
+		looks like it still has the default value. Use like this: >
+			set ambiwidth=double
+			call test_option_not_set('ambiwidth')
+<		Now the 'ambiwidth' option behaves like it was never changed,
+		even though the value is "double".
+		Only to be used for testing!
+
 test_override({name}, {val})				*test_override()*
 		Overrides certain parts of Vims internal processing to be able
 		to run tests. Only to be used for testing Vim!
@@ -8696,6 +8766,7 @@ test_override({name}, {val})				*test_override()*
 
 		name	     effect when {val} is non-zero ~
 		redraw       disable the redrawing() function
+		redraw_flag  ignore the RedrawingDisabled flag
 		char_avail   disable the char_avail() function
 		starting     reset the "starting" variable, see below
 		nfa_fail     makes the NFA regexp engine fail to force a
@@ -8711,6 +8782,23 @@ test_override({name}, {val})				*test_override()*
 			call test_override('starting', 1)
 <		The value of "starting" is saved.  It is restored by: >
 			call test_override('starting', 0)
+
+test_scrollbar({which}, {value}, {dragging})		*test_scrollbar()*
+		Pretend using scrollbar {which} to move it to position
+		{value}.  {which} can be:
+			left	Left scrollbar of the current window
+			right	Right scrollbar of the current window
+			hor	Horizontal scrollbar
+
+		For the vertical scrollbars {value} can be 1 to the
+		line-count of the buffer.  For the horizontal scrollbar the
+		{value} can be between 1 and the maximum line length, assuming
+		'wrap' is not set.
+
+		When {dragging} is non-zero it's like dragging the scrollbar,
+		otherwise it's like clicking in the scrollbar.
+		Only works when the {which} scrollbar actually exists,
+		obviously only when using the GUI.
 
 test_settime({expr})					*test_settime()*
 		Set the time Vim uses internally.  Currently only used for
@@ -8827,7 +8915,7 @@ tr({src}, {fromstr}, {tostr})				*tr()*
 			echo tr("<blob>", "<>", "{}")
 <		returns "{blob}"
 
-trim({text}[, {mask}])						*trim()*
+trim({text} [, {mask}])						*trim()*
 		Return {text} as a String where any character in {mask} is
 		removed from the beginning and  end of {text}.
 		If {mask} is not given, {mask} is all characters up to 0x20,
@@ -9049,7 +9137,7 @@ win_id2win({expr})					*win_id2win()*
 win_screenpos({nr})					*win_screenpos()*
 		Return the screen position of window {nr} as a list with two
 		numbers: [row, col].  The first window always has position
-		[1, 1].
+		[1, 1], unless there is a tabline, then it is [2, 1].
 		{nr} can be the window number or the |window-ID|.
 		Return [0, 0] if the window cannot be found in the current
 		tabpage.
@@ -9078,6 +9166,35 @@ winheight({nr})						*winheight()*
 		This excludes any window toolbar line.
 		Examples: >
   :echo "The current window has " . winheight(0) . " lines."
+<
+winlayout([{tabnr}])					*winlayout()*
+		The result is a nested List containing the layout of windows
+		in a tabpage.
+
+		Without {tabnr} use the current tabpage, otherwise the tabpage
+		with number {tabnr}. If the tabpage {tabnr} is not found,
+		returns an empty list.
+
+		For a leaf window, it returns:
+			['leaf', {winid}]
+		For horizontally split windows, which form a column, it
+		returns:
+			['col', [{nested list of windows}]]
+		For vertically split windows, which form a row, it returns:
+			['row', [{nested list of windows}]]
+
+		Example: >
+			" Only one window in the tab page
+			:echo winlayout()
+			['leaf', 1000]
+			" Two horizontally split windows
+			:echo winlayout()
+			['col', [['leaf', 1000], ['leaf', 1001]]]
+			" Three horizontally split windows, with two
+			" vertically split windows in the middle window
+			:echo winlayout(2)
+			['col', [['leaf', 1002], ['row', ['leaf', 1003],
+					     ['leaf', 1001]]], ['leaf', 1000]]
 <
 							*winline()*
 winline()	The result is a Number, which is the screen line of the cursor
@@ -9261,6 +9378,7 @@ amiga			Amiga version of Vim.
 arabic			Compiled with Arabic support |Arabic|.
 arp			Compiled with ARP support (Amiga).
 autocmd			Compiled with autocommand support. |autocommand|
+autochdir		Compiled with support for 'autochdir'
 autoservername		Automatically enable |clientserver|
 balloon_eval		Compiled with |balloon-eval| support.
 balloon_multiline	GUI supports multiline balloons.
@@ -11578,7 +11696,7 @@ The sandbox is also used for the |:sandbox| command.
 
 These items are not allowed in the sandbox:
 	- changing the buffer text
-	- defining or changing mapping, autocommands, functions, user commands
+	- defining or changing mapping, autocommands, user commands
 	- setting certain options (see |option-summary|)
 	- setting certain v: variables (see |v:var|)  *E794*
 	- executing a shell command
@@ -11600,6 +11718,7 @@ location.  Insecure in this context are:
 - sourcing a .vimrc or .exrc in the current directory
 - while executing in the sandbox
 - value coming from a modeline
+- executing a function that was defined in the sandbox
 
 Note that when in the sandbox and saving an option value and restoring it, the
 option will still be marked as it was set in the sandbox.
@@ -11642,4 +11761,4 @@ without the |+eval| feature.
 Find more information in the file src/testdir/README.txt.
 
 
- vim:tw=78:ts=8:ft=help:norl:
+ vim:tw=78:ts=8:noet:ft=help:norl:

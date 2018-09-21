@@ -520,23 +520,14 @@ wingotofile:
 		break;
 #endif
 
+/* Quickfix window only: view the result under the cursor in a new split. */
+#if defined(FEAT_QUICKFIX)
     case K_KENTER:
     case CAR:
-#if defined(FEAT_QUICKFIX)
-		/*
-		 * In a quickfix window a <CR> jumps to the error under the
-		 * cursor in a new window.
-		 */
 		if (bt_quickfix(curbuf))
-		{
-		    sprintf((char *)cbuf, "split +%ld%s",
-				(long)curwin->w_cursor.lnum,
-				(curwin->w_llist_ref == NULL) ? "cc" : "ll");
-		    do_cmdline_cmd(cbuf);
-		}
-#endif
+		    qf_view_result(TRUE);
 		break;
-
+#endif
 
 /* CTRL-W g  extended commands */
     case 'g':
@@ -4445,7 +4436,7 @@ win_enter_ext(
     {
 	/* Window doesn't have a local directory and we are not in the global
 	 * directory: Change to the global directory. */
-	ignored = mch_chdir((char *)globaldir);
+	vim_ignored = mch_chdir((char *)globaldir);
 	VIM_CLEAR(globaldir);
 	shorten_fnames(TRUE);
     }
@@ -7245,4 +7236,53 @@ win_findbuf(typval_T *argvars, list_T *list)
 		list_append_number(list, wp->w_id);
 }
 
+/*
+ * Get the layout of the given tab page for winlayout().
+ */
+    void
+get_framelayout(frame_T *fr, list_T *l, int outer)
+{
+    frame_T	*child;
+    list_T	*fr_list;
+    list_T	*win_list;
+
+    if (fr == NULL)
+	return;
+
+    if (outer)
+	// outermost call from f_winlayout()
+	fr_list = l;
+    else
+    {
+	fr_list = list_alloc();
+	if (fr_list == NULL)
+	    return;
+	list_append_list(l, fr_list);
+    }
+
+    if (fr->fr_layout == FR_LEAF)
+    {
+	if (fr->fr_win != NULL)
+	{
+	    list_append_string(fr_list, (char_u *)"leaf", -1);
+	    list_append_number(fr_list, fr->fr_win->w_id);
+	}
+    }
+    else
+    {
+	list_append_string(fr_list,
+	     fr->fr_layout == FR_ROW ?  (char_u *)"row" : (char_u *)"col", -1);
+
+	win_list = list_alloc();
+	if (win_list == NULL)
+	    return;
+	list_append_list(fr_list, win_list);
+	child = fr->fr_child;
+	while (child != NULL)
+	{
+	    get_framelayout(child, win_list, FALSE);
+	    child = child->fr_next;
+	}
+    }
+}
 #endif
